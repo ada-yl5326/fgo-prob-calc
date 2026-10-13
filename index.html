@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>击破与发牌概率</title>
+<meta name="description" content="精确计算一回合的击破概率，以及打手在前几回合发到指定牌的概率">
+<meta name="theme-color" content="#f3f4f6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101216" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="概率计算">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="format-detection" content="telephone=no">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="app">
+  <button type="button" class="update-bar" id="updateBar" hidden>新版本已下载，点此刷新</button>
+  <nav class="tabs" role="tablist" aria-label="功能">
+    <button type="button" role="tab" data-tab="kill" aria-controls="viewKill">击破概率</button>
+    <button type="button" role="tab" data-tab="deal" aria-controls="viewDeal">发牌概率</button>
+  </nav>
+
+  <!-- ==================== 击破概率 ==================== -->
+  <div id="viewKill" role="tabpanel">
+    <section class="result" aria-live="polite">
+      <div class="result-label">击破概率</div>
+      <div class="result-value idle" id="prob">—</div>
+      <div class="meter" id="meter" hidden><span id="meterFill"></span></div>
+      <div class="result-note" id="note">输入均伤和 HP 后自动计算</div>
+    </section>
+
+    <section class="panel">
+      <div class="cards">
+        <label class="field" id="field0">
+          <span class="field-name">First</span>
+          <input id="card0" type="text" inputmode="decimal" enterkeyhint="next" autocomplete="off" placeholder="均伤">
+          <span class="field-hint"></span>
+        </label>
+        <label class="field" id="field1">
+          <span class="field-name">Second</span>
+          <input id="card1" type="text" inputmode="decimal" enterkeyhint="next" autocomplete="off" placeholder="均伤">
+          <span class="field-hint"></span>
+        </label>
+        <label class="field" id="field2">
+          <span class="field-name">Third</span>
+          <input id="card2" type="text" inputmode="decimal" enterkeyhint="next" autocomplete="off" placeholder="均伤">
+          <span class="field-hint"></span>
+        </label>
+        <label class="field" id="field3">
+          <span class="field-name">EX</span>
+          <input id="card3" type="text" inputmode="decimal" enterkeyhint="next" autocomplete="off" placeholder="不出可留空">
+          <span class="field-hint"></span>
+        </label>
+      </div>
+      <label class="field field-hp" id="field4">
+        <span class="field-name">HP</span>
+        <input id="hp" type="text" inputmode="decimal" enterkeyhint="done" autocomplete="off" placeholder="击破血量">
+        <span class="field-hint" data-default="要算固伤时，填「击破血量 − 各卡固伤之和」">要算固伤时，填「击破血量 − 各卡固伤之和」</span>
+      </label>
+      <div class="actions"><button type="button" id="clear">清空</button></div>
+    </section>
+
+    <section class="panel" id="chartPanel" hidden>
+      <div class="panel-title">总伤害分布</div>
+      <div class="chart" id="chart" role="img" aria-label="总伤害分布图"></div>
+      <div class="chart-readout" id="readout"></div>
+      <div class="legend">
+        <span class="kill"><i></i><span id="legendKill">击破</span></span>
+        <span class="miss"><i></i><span id="legendMiss">未击破</span></span>
+      </div>
+    </section>
+
+    <details class="panel about">
+      <summary>计算规则与使用说明</summary>
+      <ul>
+        <li>每张卡的实际伤害 = 向下取整(均伤 × 随机数)。随机数从 0.900、0.901 … 1.099 共 200 个值中等概率抽取，每张卡独立。</li>
+        <li>各卡伤害之和 ≥ HP 即为击破。结果是精确值：统计了全部 200⁴ ≈ 16 亿种随机数组合，没有模拟误差。</li>
+        <li>取整方式与 Excel 计算器一致。均伤可以带小数；某张卡不出就留空。</li>
+        <li>固伤不乘随机数。要考虑时，HP 填「击破血量 − 各卡固伤之和」，结果与逐卡加固伤完全相同。</li>
+        <li>在 iPhone 上：用 Safari 打开本页 → 点「分享」→「添加到主屏幕」，之后像 App 一样从桌面打开，断网也能用。</li>
+      </ul>
+    </details>
+  </div>
+
+  <!-- ==================== 发牌概率 ==================== -->
+  <div id="viewDeal" role="tabpanel" hidden>
+    <section class="result" aria-live="polite">
+      <div class="result-label">发牌概率</div>
+      <div class="result-value" id="dealProb">—</div>
+      <div class="meter"><span id="dealMeter"></span></div>
+      <div class="result-note">
+        <div id="dealDesc"></div>
+        <div id="dealFraction"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="option-row">
+        <span class="option-name">场上从者</span>
+        <div class="seg" data-key="servants">
+          <button type="button" data-value="3">3 人</button><button type="button" data-value="2">2 人</button>
+        </div>
+      </div>
+      <div class="option-row">
+        <span class="option-name">求解</span>
+        <div class="seg" data-key="mode">
+          <button type="button" data-value="include">包含</button><button type="button" data-value="exact">仅含</button>
+        </div>
+      </div>
+      <div class="option-row" id="scopeRow">
+        <span class="option-name">回合</span>
+        <div class="seg" data-key="scope">
+          <button type="button" data-value="1">第 1 回合</button><button type="button" data-value="2">第 1、2 回合</button>
+        </div>
+      </div>
+      <div class="option-hint" id="dealHint"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">打手配卡</div>
+      <div class="decks" id="decks"></div>
+      <div class="panel-title">要发到的牌 <span class="panel-sub">点格子选择；同一张牌只能选一个回合</span></div>
+      <div class="deal-grid" id="dealGrid"></div>
+      <div class="actions"><button type="button" id="dealClear">清空选择</button></div>
+    </section>
+
+    <details class="panel about" id="dealSteps">
+      <summary>计算过程</summary>
+      <div class="steps" id="dealStepsBody"></div>
+    </details>
+
+    <details class="panel about">
+      <summary>发牌规则与说明</summary>
+      <ul>
+        <li>3 名从者上场时牌库 15 张（每人 5 张）。第 1 回合从 15 张里随机发 5 张，第 2 回合从剩下的 10 张里发 5 张，第 3 回合发出最后 5 张，然后重新洗牌。2 名从者时牌库 10 张，两个回合发完。</li>
+        <li>只看「打手」一名从者的牌；其他从者的牌只看张数，不看颜色。</li>
+        <li><b>包含</b>：该回合至少发到选中的牌，同时发到打手的其他牌也算。<b>仅含</b>：该回合发到的打手的牌恰好是选中的这些，没有打手的其他牌。</li>
+        <li><b>纹章</b>：开了纹章的牌只认这一张；同色的几张牌都开了纹章时，每张的纹章不同，按 ①②③ 区分，互不替代。没开纹章的同色牌不区分是哪一张。</li>
+        <li><b>前两回合</b>：第 1 回合发出的牌不会在第 2 回合再出现。「包含」时第 1 回合多发出的牌会让第 2 回合可用的牌变少，计算时已一并考虑。</li>
+        <li>单独看任何一个回合（不管前面的回合发了什么），概率都和第 1 回合相同。</li>
+        <li>不考虑洗牌技能、换人、从者退场等会改变牌库的情况。</li>
+      </ul>
+    </details>
+  </div>
+
+  <footer>v0.2 · 计算全部在本机完成，不上传任何数据</footer>
+</main>
+<script src="killprob.js"></script>
+<script src="deal.js"></script>
+<script src="app.js"></script>
+<script src="deal-app.js"></script>
+</body>
+</html>

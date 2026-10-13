@@ -1,0 +1,15 @@
+{
+  "name": "击破与发牌概率",
+  "short_name": "概率计算",
+  "description": "精确计算一回合的击破概率，以及打手在前几回合发到指定牌的概率",
+  "lang": "zh-CN",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f3f4f6",
+  "theme_color": "#f3f4f6",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
