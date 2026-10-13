@@ -87,7 +87,7 @@
   }
 
   /**
-   * 总伤害分布（用于画图）：把 [min, max] 分成约 maxBins 段，每段宽度为整数。
+   * 总伤害分布（用于画柱状图）：把 [min, max] 分成约 maxBins 段，每段宽度为整数。
    * HP 在范围内时，让 HP 正好落在分段边界上，这样每段要么全部击破、要么全部未击破。
    * 返回 [{ from, to, count }]：总伤害在 from ~ to（含两端）的组合数。
    */
@@ -108,10 +108,29 @@
     return bins;
   }
 
+  /**
+   * 累积概率曲线（用于画图）：在等间距（间距为整数）的点 x 上计算「总伤害 >= x」的组合数，
+   * 也就是 HP 为 x 时的击破组合数。把 [min, max+1] 分成约 segments 段：
+   * 第一个点是 min（必定 >= min，即 100%），最后一个点是 max+1（0%）；
+   * HP 在范围内时正好是其中一个点，所以曲线经过「HP，击破率」。
+   * 返回 [{ x, count }]，x 从小到大，count 从 total 降到 0。
+   */
+  function curve(prep, hp, segments) {
+    var lo = prep.min, hi = prep.max;
+    var width = Math.max(1, Math.ceil((hi - lo + 1) / segments));
+    var h = Math.ceil(hp);                               // 总伤害是整数：>= hp 等价于 >= ceil(hp)
+    var anchor = h > lo && h <= hi ? h : lo;
+    var start = anchor - Math.ceil((anchor - lo) / width) * width;
+    var xs = [];
+    for (var e = start; e <= hi; e += width) xs.push(Math.max(lo, e));   // 第一个点不早于 min
+    xs.push(hi + 1);                                      // 最后一个点：max+1
+    return xs.map(function (x) { return { x: x, count: countAtLeast(prep, x) }; });
+  }
+
   var api = {
     RAND_COUNT: RAND_COUNT, RAND_VALUES: RAND_VALUES, MAX_CARDS: MAX_CARDS,
     excelFloor: excelFloor, cardOutcomes: cardOutcomes, prepare: prepare, countAtLeast: countAtLeast,
-    exact: exact, damageRange: damageRange, histogram: histogram,
+    exact: exact, damageRange: damageRange, histogram: histogram, curve: curve,
   };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.KillProb = api;

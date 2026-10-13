@@ -1,10 +1,10 @@
-// 网页界面：读取输入 → 调用 killprob.js 计算 → 显示击破概率和总伤害分布图
+// 网页界面：读取输入 → 调用 killprob.js 计算 → 显示击破概率、伤害分布图和击破概率曲线
 (function () {
   'use strict';
 
   const K = window.KillProb;
   const STORAGE_KEY = 'killprob.inputs.v1';
-  const MAX_BINS = 48;                                   // 分布图最多约 48 根柱子
+  const CURVE_SEGMENTS = 120;                            // 击破概率曲线约 120 段（每个点都精确计算）
 
   const $ = (id) => document.getElementById(id);
   const cardInputs = [0, 1, 2, 3].map((i) => $('card' + i));
@@ -127,24 +127,63 @@
     $('legendKill').textContent = '击破 ' + formatShare(kills, prep.total);
     $('legendMiss').textContent = '未击破 ' + formatShare(prep.total - kills, prep.total);
     $('chartPanel').hidden = false;
-    chartState = { bins: K.histogram(prep, hp.value, MAX_BINS), hp: hp.value, total: prep.total, min: prep.min, max: prep.max };
+    chartState = { hp: hp.value, kills: kills, total: prep.total, min: prep.min, max: prep.max, bins: null, points: null };
     drawChart();
   }
 
-  // ---------- 分布图 ----------
+  // ---------- 图表：伤害分布 / 击破概率曲线（手动切换） ----------
 
-  const PAD = { left: 6, right: 6, top: 22, bottom: 22 };
-  const HEIGHT = 170;
-  let activeBin = -1;
+  const CHART_KEY = 'killprob.chart.v1';
+  const MAX_BINS = 48;                                   // 伤害分布最多约 48 根柱子
+  const PAD_DIST = { left: 6, right: 6, top: 22, bottom: 22 };
+  const PAD_CURVE = { left: 36, right: 10, top: 22, bottom: 22 };   // 左边留给纵轴刻度
+  const HEIGHT = 180;
+  const CAPTIONS = {
+    dist: '柱子 = 总伤害落在这一段的概率，蓝色是能击破的部分；点按后，黄色 + 蓝色 = 总伤害 ≥ 该处的概率',
+    curve: '曲线高度 = 总伤害 ≥ X 的概率，也就是 HP 为 X 时的击破率；虚线是现在的 HP',
+  };
+  let chartMode = 'dist';                                // dist：伤害分布；curve：击破概率曲线
+  let active = null;                                     // 伤害分布：点按到的柱子序号；曲线：点按到的总伤害
+  try { if (localStorage.getItem(CHART_KEY) === 'curve') chartMode = 'curve'; } catch (e) { /* 忽略 */ }
+
+  const num = (v) => v.toFixed(2);
 
   function drawChart() {
+    document.querySelectorAll('#chartMode button').forEach((b) => {
+      const on = b.dataset.mode === chartMode;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', on);
+    });
+    $('legend').hidden = chartMode !== 'dist';
+    $('chartCaption').textContent = CAPTIONS[chartMode];
     const box = $('chart');
     if (!chartState) { box.innerHTML = ''; return; }
-    const { bins, hp, total, min, max } = chartState;
+    if (chartMode === 'dist') drawDistribution(box);
+    else drawCurve(box);
+  }
+
+  function chartSize(box, pad) {
     const width = Math.max(240, box.clientWidth || 320);
-    const plotW = width - PAD.left - PAD.right, plotH = HEIGHT - PAD.top - PAD.bottom;
+    return { width, plotW: width - pad.left - pad.right, plotH: HEIGHT - pad.top - pad.bottom };
+  }
+
+  function hpMarker(xPos, hp, ratio, pad, baseY) {
+    const anchor = ratio < 0.2 ? 'start' : ratio > 0.8 ? 'end' : 'middle';
+    return '<line class="hp-line" x1="' + xPos + '" x2="' + xPos + '" y1="' + (pad.top - 4) + '" y2="' + baseY + '"/>' +
+      '<text class="hp-label" x="' + xPos + '" y="' + (pad.top - 8) + '" text-anchor="' + anchor + '">HP ' + fmt(hp) + '</text>';
+  }
+
+  /**
+   * 伤害分布：柱子 = 落在这一段的概率。点按某段时显示「总伤害 >= 该段起点」的概率（HP 为该处时的击破率）：
+   * 该段到 HP 之间的未击破部分标黄，HP 右边的蓝色照常显示，两者合起来就是这个概率；
+   * 点在蓝色区域里时，点按处左边的蓝色变淡（不计入）
+   */
+  function drawDistribution(box) {
+    const s = chartState;
+    if (!s.bins) s.bins = K.histogram(prep, s.hp, MAX_BINS);
+    const { bins, hp, total, min, max } = s;
+    const P = PAD_DIST, { width, plotW, plotH } = chartSize(box, P);
     const start = bins[0].from, end = bins[bins.length - 1].to + 1;
-    const xOf = (v) => PAD.left + ((v - start) / (end - start)) * plotW;
     const peak = Math.max(...bins.map((b) => b.count));
     const killFrom = Math.ceil(hp);
     const bw = plotW / bins.length, gap = bw >= 4 ? 1 : 0;
@@ -153,39 +192,97 @@
     bins.forEach((b, i) => {
       if (!b.count) return;
       const h = Math.max(1, (b.count / peak) * plotH);
-      const cls = (b.from >= killFrom ? 'bar-kill' : 'bar-miss') + (i === activeBin ? ' active' : '');
-      svg += '<rect class="' + cls + '" x="' + (PAD.left + i * bw + gap / 2).toFixed(2) + '" y="' + (PAD.top + plotH - h).toFixed(2) +
-        '" width="' + Math.max(0.5, bw - gap).toFixed(2) + '" height="' + h.toFixed(2) + '" rx="1"/>';
+      const kill = b.from >= killFrom, counted = active !== null && i >= active;
+      const cls = kill ? (active !== null && !counted ? 'bar-kill dim' : 'bar-kill') : counted ? 'bar-sum' : 'bar-miss';
+      svg += '<rect class="' + cls + '" x="' + num(P.left + i * bw + gap / 2) + '" y="' + num(P.top + plotH - h) +
+        '" width="' + num(Math.max(0.5, bw - gap)) + '" height="' + num(h) + '" rx="1"/>';
     });
-    const baseY = PAD.top + plotH + 0.5;
-    svg += '<line class="baseline" x1="' + PAD.left + '" x2="' + (width - PAD.right) + '" y1="' + baseY + '" y2="' + baseY + '"/>';
-    svg += '<text x="' + PAD.left + '" y="' + (HEIGHT - 6) + '">' + fmt(min) + '</text>';
-    svg += '<text x="' + (width - PAD.right) + '" y="' + (HEIGHT - 6) + '" text-anchor="end">' + fmt(max) + '</text>';
-
+    const baseY = P.top + plotH + 0.5;
+    svg += '<line class="baseline" x1="' + P.left + '" x2="' + (width - P.right) + '" y1="' + baseY + '" y2="' + baseY + '"/>';
+    svg += '<text x="' + P.left + '" y="' + (HEIGHT - 6) + '">' + fmt(min) + '</text>';
+    svg += '<text x="' + (width - P.right) + '" y="' + (HEIGHT - 6) + '" text-anchor="end">' + fmt(max) + '</text>';
     if (killFrom > start && killFrom < end) {             // HP 在图的范围内才画击破线
-      const x = xOf(killFrom).toFixed(2);
-      svg += '<line class="hp-line" x1="' + x + '" x2="' + x + '" y1="' + (PAD.top - 4) + '" y2="' + baseY + '"/>';
       const ratio = (killFrom - start) / (end - start);
-      const anchor = ratio < 0.2 ? 'start' : ratio > 0.8 ? 'end' : 'middle';
-      svg += '<text class="hp-label" x="' + x + '" y="' + (PAD.top - 8) + '" text-anchor="' + anchor + '">HP ' + fmt(hp) + '</text>';
+      svg += hpMarker(num(P.left + ratio * plotW), hp, ratio, P, baseY);
     }
     svg += '</svg>';
     box.innerHTML = svg;
 
-    const b = bins[activeBin];
-    $('readout').textContent = b
-      ? fmt(b.from) + (b.to > b.from ? ' ~ ' + fmt(b.to) : '') + '：' + formatShare(b.count, total) + (b.from >= killFrom ? '（击破）' : '（未击破）')
-      : '点按或左右滑动图表，查看各伤害区间的概率';
+    let readout = '点按或左右滑动图表，查看总伤害 ≥ 该处的概率';
+    if (active !== null) {
+      const x = Math.min(Math.max(bins[active].from, min), max);
+      const sum = bins.slice(active).reduce((acc, b) => acc + b.count, 0);   // = 1 − P(总伤害 ≤ x − 1)
+      readout = '总伤害 ≥ ' + fmt(x) + ' 的概率：' + formatShare(sum, total) + '（即 HP 为 ' + fmt(x) + ' 时的击破率）';
+    }
+    $('readout').textContent = readout;
   }
 
-  function pickBin(event) {
+  /** 击破概率曲线：总伤害 >= X 的概率（HP 为 X 时的击破率）；点按处现场精确计算，不是从曲线上读 */
+  function drawCurve(box) {
+    const s = chartState;
+    if (!s.points) s.points = K.curve(prep, s.hp, CURVE_SEGMENTS);
+    const { points, hp, kills, total, min, max } = s;
+    const P = PAD_CURVE, { width, plotW, plotH } = chartSize(box, P);
+    const x0 = points[0].x, x1 = points[points.length - 1].x;      // 最低总伤害 ~ 最高总伤害 + 1
+    const xOf = (v) => P.left + ((v - x0) / (x1 - x0)) * plotW;
+    const yOf = (count) => P.top + (1 - count / total) * plotH;
+
+    let svg = '<svg viewBox="0 0 ' + width + ' ' + HEIGHT + '" width="' + width + '" height="' + HEIGHT + '">';
+    [1, 0.5, 0].forEach((p) => {                          // 纵轴刻度：100% / 50% / 0%
+      const y = num(P.top + (1 - p) * plotH);
+      svg += '<line class="grid" x1="' + P.left + '" x2="' + (width - P.right) + '" y1="' + y + '" y2="' + y + '"/>';
+      svg += '<text x="' + (P.left - 6) + '" y="' + y + '" dy="0.35em" text-anchor="end">' + p * 100 + '%</text>';
+    });
+    const line = points.map((pt) => num(xOf(pt.x)) + ',' + num(yOf(pt.count))).join(' ');
+    svg += '<polygon class="area" points="' + num(xOf(x0)) + ',' + num(yOf(0)) + ' ' + line + ' ' + num(xOf(x1)) + ',' + num(yOf(0)) + '"/>';
+    svg += '<polyline class="curve" points="' + line + '"/>';
+    svg += '<text x="' + P.left + '" y="' + (HEIGHT - 6) + '">' + fmt(min) + '</text>';
+    svg += '<text x="' + (width - P.right) + '" y="' + (HEIGHT - 6) + '" text-anchor="end">' + fmt(max) + '</text>';
+    const h = Math.ceil(hp);                              // 总伤害是整数：>= hp 等价于 >= ceil(hp)
+    if (h > x0 && h < x1) {                               // HP 在伤害范围内：虚线，与曲线的交点高度 = 击破率
+      const x = num(xOf(h));
+      svg += hpMarker(x, hp, (h - x0) / (x1 - x0), P, num(yOf(0)));
+      svg += '<circle class="dot" cx="' + x + '" cy="' + num(yOf(kills)) + '" r="4"/>';
+    }
+    let readout = '点按或左右滑动图表，查看不同 HP 时的击破率';
+    if (active !== null) {
+      const c = K.countAtLeast(prep, active);
+      const x = num(xOf(active));
+      svg += '<line class="cursor" x1="' + x + '" x2="' + x + '" y1="' + P.top + '" y2="' + num(yOf(0)) + '"/>';
+      svg += '<circle class="cursor-dot" cx="' + x + '" cy="' + num(yOf(c)) + '" r="4"/>';
+      readout = 'HP 为 ' + fmt(active) + ' 时，击破率 ' + formatShare(c, total);
+    }
+    svg += '</svg>';
+    box.innerHTML = svg;
+    $('readout').textContent = readout;
+  }
+
+  function pick(event) {
     if (!chartState) return;
     const rect = $('chart').getBoundingClientRect();
-    const plotW = rect.width - PAD.left - PAD.right;
-    const i = Math.floor(((event.clientX - rect.left - PAD.left) / plotW) * chartState.bins.length);
-    const next = i >= 0 && i < chartState.bins.length ? i : -1;
-    if (next !== activeBin) { activeBin = next; drawChart(); }
+    let next;
+    if (chartMode === 'dist') {
+      const bins = chartState.bins;
+      const i = Math.floor(((event.clientX - rect.left - PAD_DIST.left) / (rect.width - PAD_DIST.left - PAD_DIST.right)) * bins.length);
+      next = i >= 0 && i < bins.length ? i : null;
+    } else {
+      const { points } = chartState;
+      const t = (event.clientX - rect.left - PAD_CURVE.left) / (rect.width - PAD_CURVE.left - PAD_CURVE.right);
+      const x0 = points[0].x, x1 = points[points.length - 1].x;
+      next = t < -0.05 || t > 1.05 ? null : Math.round(x0 + Math.min(1, Math.max(0, t)) * (x1 - x0));
+    }
+    if (next !== active) { active = next; drawChart(); }
   }
+
+  document.querySelectorAll('#chartMode button').forEach((b) => {
+    b.addEventListener('click', () => {
+      if (b.dataset.mode === chartMode) return;
+      chartMode = b.dataset.mode;
+      active = null;
+      try { localStorage.setItem(CHART_KEY, chartMode); } catch (e) { /* 忽略 */ }
+      drawChart();
+    });
+  });
 
   // ---------- 事件 ----------
 
@@ -197,7 +294,7 @@
   }
 
   inputs.forEach((el, i) => {
-    el.addEventListener('input', () => { activeBin = -1; schedule(); });
+    el.addEventListener('input', () => { active = null; schedule(); });
     el.addEventListener('blur', () => prettify(el));
     el.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter') return;
@@ -208,16 +305,16 @@
 
   $('clear').addEventListener('click', () => {
     inputs.forEach((el) => { el.value = ''; });
-    activeBin = -1;
+    active = null;
     update();
     cardInputs[0].focus();
   });
 
   const chart = $('chart');
-  chart.addEventListener('pointerdown', pickBin);
-  chart.addEventListener('pointermove', pickBin);
+  chart.addEventListener('pointerdown', pick);
+  chart.addEventListener('pointermove', pick);
   chart.addEventListener('pointerleave', (e) => {
-    if (e.pointerType === 'mouse' && activeBin !== -1) { activeBin = -1; drawChart(); }
+    if (e.pointerType === 'mouse' && active !== null) { active = null; drawChart(); }
   });
 
   let resizeTimer = null;

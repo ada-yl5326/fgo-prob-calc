@@ -7,6 +7,7 @@
   --accent: #2563eb;
   --accent-soft: #e3ebfd;
   --miss: #c5cad3;
+  --sum: #f2a000;                        /* 伤害分布：点按后计入的未击破部分 */
   --danger: #d0384f;
   --focus: rgba(37, 99, 235, 0.22);
   --on-accent: #ffffff;
@@ -32,6 +33,7 @@
     --accent: #6b9bff;
     --accent-soft: #1f2b44;
     --miss: #434a56;
+    --sum: #ffc94d;
     --danger: #ff6b81;
     --focus: rgba(107, 155, 255, 0.28);
     --on-accent: #0d1424;
@@ -147,25 +149,34 @@ button {
 }
 button:active { background: var(--bg); }
 
-/* 分布图 */
+/* 图表：伤害分布 / 击破概率曲线 */
 .panel-title { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+.chart-head { display: flex; justify-content: center; margin-bottom: 8px; }
 .chart { width: 100%; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
 .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
 .chart .bar-kill { fill: var(--accent); }
 .chart .bar-miss { fill: var(--miss); }
-.chart .active { fill: var(--text); }
-.chart .hp-line { stroke: var(--text); stroke-width: 1.5; stroke-dasharray: 4 3; }
+.chart .bar-sum { fill: var(--sum); }
+.chart .dim { opacity: 0.35; }
 .chart .baseline { stroke: var(--border); stroke-width: 1; }
+.chart .grid { stroke: var(--border); stroke-width: 1; }
+.chart .area { fill: var(--accent-soft); }
+.chart .curve { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linejoin: round; }
+.chart .hp-line { stroke: var(--text); stroke-width: 1.5; stroke-dasharray: 4 3; }
+.chart .dot { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+.chart .cursor { stroke: var(--muted); stroke-width: 1; }
+.chart .cursor-dot { fill: var(--text); stroke: var(--surface); stroke-width: 2; }
 .chart text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .chart text.hp-label { fill: var(--text); font-weight: 600; }
 .chart-readout {
   min-height: 21px;
   margin-top: 6px;
-  font-size: 13px;
-  color: var(--muted);
+  font-size: 14px;
+  color: var(--text);
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
+.chart-caption { margin-top: 4px; font-size: 12px; color: var(--muted); text-align: center; }
 .legend { display: flex; justify-content: center; gap: 18px; margin-top: 4px; font-size: 13px; font-variant-numeric: tabular-nums; }
 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
 .legend .kill i { background: var(--accent); }
