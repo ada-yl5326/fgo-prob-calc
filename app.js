@@ -1,16 +1,19 @@
-// 网页界面：读取输入 → 调用 killprob.js 计算 → 显示击破概率、伤害分布图和击破概率曲线
+// 击破概率页面：伤害组（每组 4 张卡的均伤、HP、SL 次数）→ 调用 killprob.js 计算 → 显示击破概率、SL 表、伤害分布图和击破概率曲线
 (function () {
   'use strict';
 
   const K = window.KillProb;
-  const STORAGE_KEY = 'killprob.inputs.v1';
+  const G = window.Groups;
   const CURVE_SEGMENTS = 120;                            // 击破概率曲线约 120 段（每个点都精确计算）
+  const MAX_SL = 999;
+  const SL_ROWS = 5;                                     // SL 表至少列出 0 ~ 5 次
 
   const $ = (id) => document.getElementById(id);
   const cardInputs = [0, 1, 2, 3].map((i) => $('card' + i));
   const hpInput = $('hp');
-  const inputs = cardInputs.concat(hpInput);
-  const fields = [0, 1, 2, 3, 4].map((i) => $('field' + i));
+  const slInput = $('sl');
+  const inputs = cardInputs.concat(hpInput, slInput);
+  const fields = [0, 1, 2, 3, 4, 5].map((i) => $('field' + i));
 
   const intFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
   const fmt = (n) => intFormat.format(n);
@@ -19,7 +22,7 @@
 
   /** 去掉千分位逗号、空格，全角数字和小数点转半角 */
   function normalize(text) {
-    return text
+    return String(text)
       .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
       .replace(/[．。]/g, '.')
       .replace(/[,，\s]/g, '');
@@ -33,8 +36,18 @@
     return { value: Number(t) };
   }
 
+  /** SL 次数：空 = 0；只能是 0 ~ 999 的整数 */
+  function parseSL(text) {
+    const t = normalize(text);
+    if (t === '') return { empty: true, value: 0 };
+    if (!/^\d+$/.test(t)) return { error: '请输入整数' };
+    const v = Number(t);
+    return v > MAX_SL ? { error: '最多 ' + MAX_SL + ' 次' } : { value: v };
+  }
+
   /** 离开输入框时加上千分位逗号（小数部分保持原样，不改变数值） */
   function prettify(el) {
+    if (el === slInput) return;
     const r = parse(el.value);
     if (r.error || r.empty) return;
     const [intPart, frac] = normalize(el.value).split('.');
@@ -47,88 +60,177 @@
     fields[i].classList.toggle('invalid', !!invalid);
   }
 
-  function save() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(inputs.map((el) => el.value))); } catch (e) { /* 无痕模式等 */ }
+  // ---------- 计算（击破概率页和综合页共用） ----------
+
+  const withSL = K.withSL;                               // SL n 次后的击破率 = 1 − (1 − p)^(n+1)
+
+  const prepCache = new Map();                           // 均伤 → 预处理结果（只和均伤有关，改 HP 时不用重算）
+  function prepared(avgs) {
+    const key = avgs.join('|');
+    let prep = prepCache.get(key);
+    if (!prep) {
+      prep = K.prepare(avgs);
+      prepCache.set(key, prep);
+      if (prepCache.size > 12) prepCache.delete(prepCache.keys().next().value);
+    }
+    return prep;
   }
 
-  function restore() {
-    try {
-      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
-      if (Array.isArray(saved)) saved.forEach((v, i) => { if (inputs[i] && typeof v === 'string') inputs[i].value = v; });
-    } catch (e) { /* 忽略 */ }
+  /**
+   * 算一个伤害组：返回 { status: 'ok', single, final, sl, kills, total, prep, hp, avgs }
+   * 或 { status: 'idle' | 'error', message, parsed }
+   */
+  function evaluate(data) {
+    const cards = data.cards.map(parse), hp = parse(data.hp), sl = parseSL(data.sl);
+    const parsed = { cards, hp, sl };
+    if (cards.some((r) => r.error) || hp.error || sl.error) return { status: 'error', message: '请检查标红的输入', parsed };
+    if (cards.every((r) => r.empty)) return { status: 'idle', message: '输入均伤和 HP 后自动计算', parsed };
+    if (hp.empty) return { status: 'idle', message: '再输入 HP 就能算出击破概率', parsed };
+    const avgs = cards.map((r) => r.value);
+    const prep = prepared(avgs);
+    const kills = K.countAtLeast(prep, hp.value);
+    const single = kills / prep.total;
+    return { status: 'ok', single, final: kills === prep.total ? 1 : withSL(single, sl.value), sl: sl.value, kills, total: prep.total, prep, hp: hp.value, avgs, parsed };
   }
 
-  // ---------- 计算与显示 ----------
-
-  let prepKey = null, prep = null;                       // 均伤不变时，改 HP 不用重新预处理
-  let chartState = null;                                 // 最近一次分布图的数据（窗口大小变化时重画）
-
-  function formatProbability(kills, total) {
-    if (kills === total) return '100%';
-    if (kills === 0) return '0%';
-    const p = (kills / total) * 100;
-    if (p >= 99.99995) return '> 99.9999%';
-    if (p < 0.00005) return '< 0.0001%';
-    return p.toFixed(4) + '%';
+  /** 百分比，保留 4 位小数；接近 0 或 100% 时不写成 0% / 100% */
+  function formatPct(p) {
+    if (p >= 1) return '100%';
+    if (p <= 0) return '0%';
+    const v = p * 100;
+    if (v >= 99.99995) return '> 99.9999%';
+    if (v < 0.00005) return '< 0.0001%';
+    return v.toFixed(4) + '%';
   }
 
-  function formatShare(count, total) {
-    const p = (count / total) * 100;
-    if (count > 0 && p < 0.01) return '< 0.01%';
-    if (count < total && p > 99.99) return '> 99.99%';
-    return p.toFixed(2) + '%';
+  /** 百分比，保留 2 位小数（图表、简短显示） */
+  function formatShort(p) {
+    if (p >= 1) return '100%';
+    if (p <= 0) return '0%';
+    const v = p * 100;
+    if (v < 0.01) return '< 0.01%';
+    if (v > 99.99) return '> 99.99%';
+    return v.toFixed(2) + '%';
   }
+
+  // ---------- 伤害组 ----------
+
+  function cleanData(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const str = (v) => (typeof v === 'string' ? v : '');
+    const cards = Array.isArray(raw.cards) ? raw.cards.slice(0, 4).map(str) : [];
+    while (cards.length < 4) cards.push('');
+    return { cards, hp: str(raw.hp), sl: str(raw.sl) };
+  }
+
+  const store = new G.GroupStore({
+    key: 'killprob.kill.v2', label: '伤害组', idPrefix: 'k',
+    naming: (n) => '伤害组' + n,
+    create: () => ({ cards: ['', '', '', ''], hp: '', sl: '' }),
+    clean: cleanData,
+    legacy: () => {                                      // v0.3 只有一组：[4 张卡, HP]
+      try {
+        const old = JSON.parse(localStorage.getItem('killprob.inputs.v1') || 'null');
+        if (Array.isArray(old)) return cleanData({ cards: old.slice(0, 4), hp: old[4] });
+      } catch (e) { /* 忽略 */ }
+      return null;
+    },
+  });
+
+  function summary(g) {
+    const r = evaluate(g.data);
+    return r.status === 'ok' ? formatShort(r.final) : '未完成';
+  }
+
+  // 由 main.js 读取：综合页用
+  window.KillApp = { store, evaluate, formatPct, formatShort, summary };
+
+  function loadInputs() {
+    const d = store.active().data;
+    cardInputs.forEach((el, i) => { el.value = d.cards[i]; });
+    hpInput.value = d.hp;
+    slInput.value = d.sl;
+    inputs.forEach(prettify);
+  }
+
+  function saveInputs() {
+    const d = store.active().data;
+    cardInputs.forEach((el, i) => { d.cards[i] = el.value; });
+    d.hp = hpInput.value;
+    d.sl = slInput.value;
+    store.changed();
+  }
+
+  // ---------- 显示 ----------
+
+  let current = null;                                    // 最近一次的计算结果（图表用）
+  let chartState = null;                                 // 最近一次图表的数据（窗口大小变化时重画）
 
   function showIdle(message) {
+    $('probLabel').textContent = '击破概率';
     $('prob').textContent = '—';
     $('prob').classList.add('idle');
     $('meter').hidden = true;
     $('note').textContent = message;
     $('chartPanel').hidden = true;
+    $('slPanel').hidden = true;
     chartState = null;
   }
 
   function update() {
-    const cards = cardInputs.map((el) => parse(el.value));
-    const hp = parse(hpInput.value);
-    save();
-
-    cards.forEach((r, i) => {
-      if (r.error) setHint(i, r.error, true);
-      else if (r.empty) setHint(i, '');
+    const r = evaluate(store.active().data);
+    current = r;
+    const { cards, hp, sl } = r.parsed;
+    cards.forEach((c, i) => {
+      if (c.error) setHint(i, c.error, true);
+      else if (c.empty) setHint(i, '');
       else {
-        const c = K.cardOutcomes(r.value);
-        setHint(i, fmt(c[0]) + ' ~ ' + fmt(c[c.length - 1]));
+        const o = K.cardOutcomes(c.value);
+        setHint(i, fmt(o[0]) + ' ~ ' + fmt(o[o.length - 1]));
       }
     });
     setHint(4, hp.error, !!hp.error);
+    setHint(5, sl.error, !!sl.error);
+    if (r.status !== 'ok') return showIdle(r.message);
 
-    if (cards.some((r) => r.error) || hp.error) return showIdle('请检查标红的输入');
-    if (cards.every((r) => r.empty)) return showIdle('输入均伤和 HP 后自动计算');
-    if (hp.empty) return showIdle('再输入 HP 就能算出击破概率');
-
-    const avgs = cards.map((r) => r.value);
-    const key = avgs.join('|');
-    if (key !== prepKey) { prep = K.prepare(avgs); prepKey = key; }
-    const kills = K.countAtLeast(prep, hp.value);
-
-    $('prob').textContent = formatProbability(kills, prep.total);
+    const { prep, kills } = r;
+    $('probLabel').textContent = r.sl ? '击破概率（SL ' + r.sl + ' 次）' : '击破概率';
+    $('prob').textContent = formatPct(r.final);
     $('prob').classList.remove('idle');
     $('meter').hidden = false;
-    $('meterFill').style.width = (kills / prep.total) * 100 + '%';
+    $('meterFill').style.width = r.final * 100 + '%';
 
-    let lines;
-    if (prep.min >= hp.value) lines = ['最低伤害 ' + fmt(prep.min) + ' ≥ HP，必定击破'];
-    else if (prep.max < hp.value) lines = ['最高伤害 ' + fmt(prep.max) + ' < HP，无法击破'];
-    else lines = ['总伤害 ' + fmt(prep.min) + ' ~ ' + fmt(prep.max)];
-    if (hp.value > 0) lines.push('平均 ' + fmt(prep.mean) + '，是 HP 的 ' + ((prep.mean / hp.value) * 100).toFixed(2) + '%');
+    const lines = [];
+    if (r.sl) lines.push('单次击破率 ' + formatPct(r.single) + '，失败后可以重来 ' + r.sl + ' 次');
+    if (prep.min >= r.hp) lines.push('最低伤害 ' + fmt(prep.min) + ' ≥ HP，必定击破');
+    else if (prep.max < r.hp) lines.push('最高伤害 ' + fmt(prep.max) + ' < HP，无法击破');
+    else lines.push('总伤害 ' + fmt(prep.min) + ' ~ ' + fmt(prep.max));
+    if (r.hp > 0) lines.push('平均 ' + fmt(prep.mean) + '，是 HP 的 ' + ((prep.mean / r.hp) * 100).toFixed(2) + '%');
     $('note').innerHTML = lines.map((s) => '<div>' + s + '</div>').join('');
 
-    $('legendKill').textContent = '击破 ' + formatShare(kills, prep.total);
-    $('legendMiss').textContent = '未击破 ' + formatShare(prep.total - kills, prep.total);
+    renderSLTable(r);
+
+    $('legendKill').textContent = '击破 ' + formatShort(kills / prep.total);
+    $('legendMiss').textContent = '未击破 ' + formatShort(1 - kills / prep.total);
     $('chartPanel').hidden = false;
-    chartState = { hp: hp.value, kills: kills, total: prep.total, min: prep.min, max: prep.max, bins: null, points: null };
+    chartState = { hp: r.hp, sl: r.sl, kills, total: prep.total, min: prep.min, max: prep.max, prep, bins: null, points: null };
     drawChart();
+  }
+
+  /** SL 次数与击破率：0 ~ 5 次（SL 更多时加上当前次数） */
+  function renderSLTable(r) {
+    const rows = [];
+    for (let n = 0; n <= SL_ROWS; n++) rows.push(n);
+    if (r.sl > SL_ROWS) rows.push(r.sl);
+    const p = r.single;
+    $('slPanel').hidden = p <= 0 || p >= 1;
+    if (p <= 0 || p >= 1) return;
+    $('slTable').innerHTML = '<thead><tr><th>SL 次数</th><th>机会</th><th>击破率</th><th>比不 SL 提高</th></tr></thead><tbody>' +
+      rows.map((n) => {
+        const q = withSL(p, n);
+        return '<tr' + (n === r.sl ? ' class="on"' : '') + '><td>' + n + (n === r.sl ? ' ←' : '') + '</td><td>' + (n + 1) + ' 次</td><td>' +
+          formatPct(q) + '</td><td>' + (n ? '+' + ((q - p) * 100).toFixed(2) + ' 个百分点' : '—') + '</td></tr>';
+      }).join('') + '</tbody>';
   }
 
   // ---------- 图表：伤害分布 / 击破概率曲线（手动切换） ----------
@@ -155,7 +257,10 @@
       b.setAttribute('aria-pressed', on);
     });
     $('legend').hidden = chartMode !== 'dist';
-    $('chartCaption').textContent = CAPTIONS[chartMode];
+    $('legendCurve').hidden = chartMode !== 'curve' || !chartState || !chartState.sl;
+    if (chartState && chartState.sl) $('legendSL').textContent = 'SL ' + chartState.sl + ' 次后';
+    $('chartCaption').textContent = CAPTIONS[chartMode] +
+      (chartMode === 'curve' && chartState && chartState.sl ? '；紫色是 SL ' + chartState.sl + ' 次后的击破率' : '');
     const box = $('chart');
     if (!chartState) { box.innerHTML = ''; return; }
     if (chartMode === 'dist') drawDistribution(box);
@@ -173,6 +278,11 @@
       '<text class="hp-label" x="' + xPos + '" y="' + (pad.top - 8) + '" text-anchor="' + anchor + '">HP ' + fmt(hp) + '</text>';
   }
 
+  /** 「；SL n 次后 x%」：读数里附带 SL 后的击破率 */
+  function slSuffix(p, sl, sep) {
+    return sl ? sep + 'SL ' + sl + ' 次后 ' + formatShort(withSL(p, sl)) : '';
+  }
+
   /**
    * 伤害分布：柱子 = 落在这一段的概率。点按某段时显示「总伤害 >= 该段起点」的概率（HP 为该处时的击破率）：
    * 该段到 HP 之间的未击破部分标黄，HP 右边的蓝色照常显示，两者合起来就是这个概率；
@@ -180,7 +290,7 @@
    */
   function drawDistribution(box) {
     const s = chartState;
-    if (!s.bins) s.bins = K.histogram(prep, s.hp, MAX_BINS);
+    if (!s.bins) s.bins = K.histogram(s.prep, s.hp, MAX_BINS);
     const { bins, hp, total, min, max } = s;
     const P = PAD_DIST, { width, plotW, plotH } = chartSize(box, P);
     const start = bins[0].from, end = bins[bins.length - 1].to + 1;
@@ -212,45 +322,52 @@
     if (active !== null) {
       const x = Math.min(Math.max(bins[active].from, min), max);
       const sum = bins.slice(active).reduce((acc, b) => acc + b.count, 0);   // = 1 − P(总伤害 ≤ x − 1)
-      readout = '总伤害 ≥ ' + fmt(x) + ' 的概率：' + formatShare(sum, total) + '（即 HP 为 ' + fmt(x) + ' 时的击破率）';
+      readout = '总伤害 ≥ ' + fmt(x) + ' 的概率：' + formatShort(sum / total) + '（即 HP 为 ' + fmt(x) + ' 时的击破率' +
+        slSuffix(sum / total, s.sl, '；') + '）';
     }
     $('readout').textContent = readout;
   }
 
-  /** 击破概率曲线：总伤害 >= X 的概率（HP 为 X 时的击破率）；点按处现场精确计算，不是从曲线上读 */
+  /** 击破概率曲线：总伤害 >= X 的概率（HP 为 X 时的击破率）；SL > 0 时加画 SL 后的曲线。点按处现场精确计算 */
   function drawCurve(box) {
     const s = chartState;
-    if (!s.points) s.points = K.curve(prep, s.hp, CURVE_SEGMENTS);
-    const { points, hp, kills, total, min, max } = s;
+    if (!s.points) s.points = K.curve(s.prep, s.hp, CURVE_SEGMENTS);
+    const { points, hp, kills, total, min, max, sl } = s;
     const P = PAD_CURVE, { width, plotW, plotH } = chartSize(box, P);
     const x0 = points[0].x, x1 = points[points.length - 1].x;      // 最低总伤害 ~ 最高总伤害 + 1
     const xOf = (v) => P.left + ((v - x0) / (x1 - x0)) * plotW;
-    const yOf = (count) => P.top + (1 - count / total) * plotH;
+    const yOf = (p) => P.top + (1 - p) * plotH;
 
     let svg = '<svg viewBox="0 0 ' + width + ' ' + HEIGHT + '" width="' + width + '" height="' + HEIGHT + '">';
     [1, 0.5, 0].forEach((p) => {                          // 纵轴刻度：100% / 50% / 0%
-      const y = num(P.top + (1 - p) * plotH);
+      const y = num(yOf(p));
       svg += '<line class="grid" x1="' + P.left + '" x2="' + (width - P.right) + '" y1="' + y + '" y2="' + y + '"/>';
       svg += '<text x="' + (P.left - 6) + '" y="' + y + '" dy="0.35em" text-anchor="end">' + p * 100 + '%</text>';
     });
-    const line = points.map((pt) => num(xOf(pt.x)) + ',' + num(yOf(pt.count))).join(' ');
+    const line = points.map((pt) => num(xOf(pt.x)) + ',' + num(yOf(pt.count / total))).join(' ');
     svg += '<polygon class="area" points="' + num(xOf(x0)) + ',' + num(yOf(0)) + ' ' + line + ' ' + num(xOf(x1)) + ',' + num(yOf(0)) + '"/>';
     svg += '<polyline class="curve" points="' + line + '"/>';
+    if (sl) {
+      const lineSL = points.map((pt) => num(xOf(pt.x)) + ',' + num(yOf(withSL(pt.count / total, sl)))).join(' ');
+      svg += '<polyline class="curve-sl" points="' + lineSL + '"/>';
+    }
     svg += '<text x="' + P.left + '" y="' + (HEIGHT - 6) + '">' + fmt(min) + '</text>';
     svg += '<text x="' + (width - P.right) + '" y="' + (HEIGHT - 6) + '" text-anchor="end">' + fmt(max) + '</text>';
     const h = Math.ceil(hp);                              // 总伤害是整数：>= hp 等价于 >= ceil(hp)
     if (h > x0 && h < x1) {                               // HP 在伤害范围内：虚线，与曲线的交点高度 = 击破率
       const x = num(xOf(h));
       svg += hpMarker(x, hp, (h - x0) / (x1 - x0), P, num(yOf(0)));
-      svg += '<circle class="dot" cx="' + x + '" cy="' + num(yOf(kills)) + '" r="4"/>';
+      svg += '<circle class="dot" cx="' + x + '" cy="' + num(yOf(kills / total)) + '" r="4"/>';
+      if (sl) svg += '<circle class="dot-sl" cx="' + x + '" cy="' + num(yOf(withSL(kills / total, sl))) + '" r="4"/>';
     }
     let readout = '点按或左右滑动图表，查看不同 HP 时的击破率';
     if (active !== null) {
-      const c = K.countAtLeast(prep, active);
+      const p = K.countAtLeast(s.prep, active) / total;
       const x = num(xOf(active));
       svg += '<line class="cursor" x1="' + x + '" x2="' + x + '" y1="' + P.top + '" y2="' + num(yOf(0)) + '"/>';
-      svg += '<circle class="cursor-dot" cx="' + x + '" cy="' + num(yOf(c)) + '" r="4"/>';
-      readout = 'HP 为 ' + fmt(active) + ' 时，击破率 ' + formatShare(c, total);
+      svg += '<circle class="cursor-dot" cx="' + x + '" cy="' + num(yOf(p)) + '" r="4"/>';
+      if (sl) svg += '<circle class="cursor-dot" cx="' + x + '" cy="' + num(yOf(withSL(p, sl))) + '" r="4"/>';
+      readout = 'HP 为 ' + fmt(active) + ' 时，击破率 ' + formatShort(p) + slSuffix(p, sl, '，');
     }
     svg += '</svg>';
     box.innerHTML = svg;
@@ -294,7 +411,7 @@
   }
 
   inputs.forEach((el, i) => {
-    el.addEventListener('input', () => { active = null; schedule(); });
+    el.addEventListener('input', () => { active = null; saveInputs(); schedule(); });
     el.addEventListener('blur', () => prettify(el));
     el.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter') return;
@@ -306,6 +423,7 @@
   $('clear').addEventListener('click', () => {
     inputs.forEach((el) => { el.value = ''; });
     active = null;
+    saveInputs();
     update();
     cardInputs[0].focus();
   });
@@ -323,45 +441,18 @@
     resizeTimer = setTimeout(drawChart, 100);
   });
 
-  restore();
-  inputs.forEach(prettify);
-  update();
-
-  // ---------- 页签：击破概率 / 发牌概率 ----------
-
-  const TAB_KEY = 'killprob.tab.v1';
-  const views = { kill: $('viewKill'), deal: $('viewDeal') };
-
-  function showTab(name, remember) {
-    if (!views[name]) name = 'kill';
-    Object.keys(views).forEach((key) => {
-      views[key].hidden = key !== name;
-      const tab = document.querySelector('[data-tab="' + key + '"]');
-      tab.classList.toggle('on', key === name);
-      tab.setAttribute('aria-selected', key === name);
-    });
-    if (name === 'kill') drawChart();                    // 隐藏时量不到图表宽度，切回来时重画
-    if (!remember) return;
-    try { localStorage.setItem(TAB_KEY, name); } catch (e) { /* 忽略 */ }
-    history.replaceState(null, '', name === 'deal' ? '#deal' : location.pathname + location.search);
-  }
-
-  document.querySelectorAll('[data-tab]').forEach((tab) => {
-    tab.addEventListener('click', () => showTab(tab.dataset.tab, true));
+  // 切换 / 新建 / 删除伤害组：把这一组的输入填回输入框
+  store.onChange((reason) => {
+    if (reason === 'data' || reason === 'rename') return;
+    active = null;
+    loadInputs();
+    update();
   });
-  let firstTab = location.hash === '#deal' ? 'deal' : location.hash === '#kill' ? 'kill' : null;
-  if (!firstTab) { try { firstTab = localStorage.getItem(TAB_KEY); } catch (e) { /* 忽略 */ } }
-  showTab(firstTab || 'kill', false);
+  new G.GroupBar($('killGroups'), store, { summary, onUsed: (id) => (window.ComboApp ? window.ComboApp.usage('kill', id) : 0) });
 
-  // 离线缓存：只在 https 或本机调试时可用（直接双击打开 index.html 时不启用，不影响计算）
-  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
-    const hadController = !!navigator.serviceWorker.controller;   // 第一次安装时不提示
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (hadController) $('updateBar').hidden = false;
-    });
-    navigator.serviceWorker.register('sw.js')
-      .then((reg) => reg.update())
-      .catch(() => { /* 不影响使用 */ });
-    $('updateBar').addEventListener('click', () => location.reload());
-  }
+  // 页签切回来时重画（隐藏时量不到图表宽度）
+  document.addEventListener('tabshow', (e) => { if (e.detail === 'kill') drawChart(); });
+
+  loadInputs();
+  update();
 })();

@@ -8,6 +8,7 @@
   --accent-soft: #e3ebfd;
   --miss: #c5cad3;
   --sum: #f2a000;                        /* 伤害分布：点按后计入的未击破部分 */
+  --sl: #7c3aed;                         /* SL 后的击破率曲线 */
   --danger: #d0384f;
   --focus: rgba(37, 99, 235, 0.22);
   --on-accent: #ffffff;
@@ -34,6 +35,7 @@
     --accent-soft: #1f2b44;
     --miss: #434a56;
     --sum: #ffc94d;
+    --sl: #b48cff;
     --danger: #ff6b81;
     --focus: rgba(107, 155, 255, 0.28);
     --on-accent: #0d1424;
@@ -181,6 +183,9 @@ button:active { background: var(--bg); }
 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
 .legend .kill i { background: var(--accent); }
 .legend .miss i { background: var(--miss); }
+.legend .sl i { background: var(--sl); }
+.chart .curve-sl { fill: none; stroke: var(--sl); stroke-width: 2.5; stroke-linejoin: round; }
+.chart .dot-sl { fill: var(--sl); stroke: var(--surface); stroke-width: 2; }
 
 /* 说明 */
 .about summary { font-size: 14px; font-weight: 600; cursor: pointer; }
@@ -256,7 +261,7 @@ footer { text-align: center; font-size: 12px; color: var(--muted); margin-top: 8
 /* 发牌概率：打手的 5 张牌 × 纹章 / 各回合 */
 .deal-grid {
   display: grid;
-  grid-template-columns: 4.6em repeat(5, minmax(0, 1fr));
+  grid-template-columns: 4.9em repeat(5, minmax(0, 1fr));
   gap: 7px 6px;
   align-items: center;
 }
@@ -306,5 +311,225 @@ footer { text-align: center; font-size: 12px; color: var(--muted); margin-top: 8
 .steps .sum { color: var(--text); font-weight: 600; }
 #dealDesc { color: var(--text); }
 #dealDesc + div { margin-top: 4px; }
+
+
+/* 提示文字 */
+.warn { color: var(--danger); }
+.notice {
+  margin: -4px 0 12px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--gold-soft);
+  font-size: 13px;
+}
+.actions-bare { margin: -4px 0 12px; }
+button:disabled { opacity: 0.4; cursor: default; }
+
+/* 组的切换条：伤害组 / 发牌组 */
+.groupbar { margin-bottom: 12px; }
+.group-chips {
+  position: relative;                    /* 子元素的 offsetLeft 以它为准 */
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 2px 2px 6px;
+  scrollbar-width: none;
+}
+.group-chips::-webkit-scrollbar { display: none; }
+.group-chip, .group-add {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  border-radius: 10px;
+  padding: 4px 12px;
+  background: var(--surface);
+  line-height: 1.25;
+}
+.group-chip-name { font-size: 14px; font-weight: 600; color: var(--text); white-space: nowrap; }
+.group-chip-sub { font-size: 11px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.group-chip.on { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 2px var(--focus); }
+.group-add { justify-content: center; color: var(--accent); border-style: dashed; }
+.group-tools { display: flex; gap: 6px; align-items: center; }
+.group-name {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 16px;                       /* 不小于 16px，iPhone 点输入框时才不会自动放大页面 */
+  padding: 5px 10px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  outline: none;
+}
+.group-name:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus); }
+.group-tools button { flex: none; }
+.group-clear { display: flex; justify-content: flex-end; margin-top: 6px; }
+.group-clear button { font-size: 12px; padding: 3px 10px; color: var(--danger); border-color: var(--border); }
+
+/* 确认框 */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.45);
+}
+.modal-box {
+  width: 100%;
+  max-width: 340px;
+  padding: 18px 16px 14px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+}
+.modal-text { font-size: 15px; line-height: 1.6; white-space: pre-line; color: var(--text); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.modal-actions button { padding: 6px 16px; }
+.modal-actions .danger { background: var(--danger); border-color: var(--danger); color: #fff; font-weight: 600; }
+.modal-actions .primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+
+/* 击破概率：SL 次数、SL 表 */
+.field-sl { margin-top: 2px; }
+.field-sl input { width: 7em; }
+.sl-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.sl-table th, .sl-table td { text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.sl-table th { font-weight: 600; color: var(--muted); }
+.sl-table td { color: var(--muted); }
+.sl-table th:first-child, .sl-table td:first-child { text-align: left; }
+.sl-table tr.on td { color: var(--text); font-weight: 700; background: var(--accent-soft); }
+
+/* 发牌概率：每名从者一块；每回合左边的「包含 / 仅含 / 不限 / 不能有」按钮 */
+.owner-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.owner-head .panel-title { margin-bottom: 0; }
+.owner-remove { font-size: 12px; padding: 3px 10px; }
+.owner-empty { padding: 10px 14px; }
+.owner-add { width: 100%; border-style: dashed; color: var(--accent); padding: 8px 0; margin-bottom: 4px; }
+.g-turn { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+.cell-mode {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  line-height: 18px;
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--bg);
+}
+.cell-mode.on { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
+
+/* 综合击破概率：结果、可拖动的组、回合表 */
+.formula { color: var(--text); font-weight: 600; margin-bottom: 4px; overflow-wrap: anywhere; }
+.combo-factors { list-style: none; margin: 8px auto 0; padding: 0; max-width: 360px; text-align: left; }
+.combo-factors li { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; border-top: 1px solid var(--border); }
+.combo-factors li b { color: var(--text); font-weight: 600; }
+.combo-factors li.weak b, .combo-factors li.weak span { color: var(--danger); }
+
+.palette { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; min-height: 8px; }
+.gchip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  border-radius: 10px;
+  padding: 4px 11px;
+  background: var(--bg);
+  line-height: 1.25;
+  touch-action: none;                    /* 按住就能拖，不会滚动页面 */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.gchip span { font-size: 14px; font-weight: 600; color: var(--text); }
+.gchip small { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.gchip.kill { border-left: 4px solid var(--accent); }
+.gchip.deal { border-left: 4px solid var(--gold); }
+.gchip.selected { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 2px var(--focus); }
+
+.timeline {
+  display: grid;
+  grid-template-columns: 2em minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px;
+}
+.tl-h { font-size: 12px; font-weight: 600; color: var(--muted); text-align: center; }
+.tl-turn { grid-column: 1; align-self: center; font-size: 13px; font-weight: 700; color: var(--muted); text-align: center; }
+.tl-slot {
+  min-height: 58px;
+  border: 1.5px dashed var(--border);
+  border-radius: 10px;
+  font-size: 12px;
+  color: var(--muted);
+  background: transparent;
+}
+.tl-item {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  min-height: 58px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  font-size: 12px;
+  overflow: hidden;
+}
+.tl-item.kill { border-left: 4px solid var(--accent); }
+.tl-item.deal { border-left: 4px solid var(--gold); }
+.tl-item.bad { border-color: var(--danger); }
+.tl-grip {
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 16px;
+  cursor: grab;
+  touch-action: none;                    /* 按住 ⠿ 拖动；按在别处可以正常滚动页面 */
+  user-select: none;
+  -webkit-user-select: none;
+}
+.tl-body { flex: 1; min-width: 0; padding: 6px 2px; }
+.tl-name { font-size: 13px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-rate { color: var(--text); font-variant-numeric: tabular-nums; }
+.tl-sub { color: var(--muted); font-size: 11px; }
+.tl-tag { margin-top: 3px; color: var(--muted); }
+.tl-tag.warn { color: var(--gold); font-weight: 600; }
+.tl-warn { margin-top: 3px; color: var(--danger); }
+.tl-remove {
+  flex: none;
+  align-self: flex-start;
+  border: 0;
+  padding: 2px 8px;
+  font-size: 16px;
+  line-height: 1.2;
+  border-radius: 0 0 0 8px;
+}
+.tl-slot.target, .tl-item.target, .drop-kill [data-slot="kill"], .drop-deal [data-slot="deal"] { border-color: var(--accent); }
+.tl-slot.target, .drop-kill .tl-slot[data-slot="kill"], .drop-deal .tl-slot[data-slot="deal"] { color: var(--accent); background: var(--accent-soft); }
+.drop-hover { box-shadow: 0 0 0 3px var(--focus); background: var(--accent-soft) !important; }
+.turn-bar { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.turn-bar #turnMinus, .turn-bar #turnPlus { width: 36px; padding: 4px 0; font-size: 16px; }
+.turn-bar #turnCount { font-size: 13px; color: var(--muted); min-width: 4.5em; text-align: center; }
+.turn-clear { margin-left: auto; }
+
+.drag-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 10;
+  pointer-events: none;
+  padding: 6px 12px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+}
+.drag-ghost.deal { border-color: var(--gold); }
+body.dragging, body.dragging * { cursor: grabbing !important; user-select: none; -webkit-user-select: none; }
 
 [hidden] { display: none !important; }

@@ -7,17 +7,24 @@
  *     牌库随机洗好后，第 1 回合发出前 5 张，第 2 回合发出接下来的 5 张……k 个回合发完后重新洗牌。
  *     所以每种发牌结果的可能性都相同。
  *
- * 以「打手」为主视角：只关心打手的 5 张牌分别在哪个回合发出；其他从者的牌只看张数，不看颜色。
- * 打手的牌按「种类」分组：开了纹章的牌各自独一无二；没开纹章的同色牌彼此不区分。
+ * 可以同时指定几名从者的牌（每名从者 5 张）；没有指定任何条件的从者，他的牌和其他牌一样只看张数，不看颜色。
+ * 每名从者的牌按「种类」分组：开了纹章的牌各自独一无二；没开纹章的同色牌彼此不区分；不同从者的牌互不替代。
+ *
+ * 条件按「回合 × 从者」分别给出：
+ *     包含：该回合至少发到指定的牌（没指定牌时 = 不限）；
+ *     仅含：该回合发到的这名从者的牌恰好是指定的这些（没指定牌时 = 一张都不能有）。
  *
  * 公式（多元超几何分布）：
- *     第 1 回合打手各种类的牌恰好发出 y 张的组合数 = Π C(n_种类, y_种类) × C(N − 5, 5 − Σy)
- *         （N − 5 = 其他从者的牌数），除以 C(N, 5) 即为概率。
- *     前两回合：第 2 回合从剩下的 N − 5 张里发 5 张，其中打手每种牌还剩 n_种类 − y1_种类 张（合计 5 − Σy1 张），
- *         其他从者还剩 N − 10 + Σy1 张：
- *         组合数 = Π C(n_种类 − y1_种类, y2_种类) × C(N − 10 + Σy1, 5 − Σy2)，总数 = C(N, 5) × C(N − 5, 5)。
- *     「仅含」：y 恰好等于指定的牌；「包含」：对所有 y ≥ 指定的牌求和
- *         （前两回合时对 (y1, y2) 一起求和：第 1 回合多发的牌会让第 2 回合可用的牌变少，所以不会算错）。
+ *     第 1 回合各种类的牌恰好发出 y 张的组合数 = Π C(n_种类, y_种类) × C(其他牌数, 5 − Σy)，除以 C(N, 5) 即为概率。
+ *     共享发牌（同一轮洗牌里的几个回合）：后一回合从剩下的牌里发，每种牌还剩 n_种类 − 前面发出的张数，
+ *         组合数逐回合相乘，总数 = C(N, 5) × C(N − 5, 5) × …。
+ *     「包含」对所有满足条件的 y 一起求和：前面回合多发的牌会让后面回合可用的牌变少，这些情况自动是 0，所以不会算错。
+ *
+ * 快速算法：几个回合的组合数之积可以按种类拆开——
+ *     Π_回合 Π_种类 C(剩余, y) = Π_种类 [n! / (y_1! … y_T! (n − Σy)!)]（每种牌分到各回合的分法），
+ *     其他牌的组合数只和每回合发了几张指定从者的牌 k_t 有关。
+ *     所以逐个种类累加「各回合已发张数 (k_1 … k_T)」的分布（最多 6³ = 216 种状态），最后乘上其他牌的组合数，
+ *     几名从者、三个回合也只要几毫秒。计算过程只列出前几十项，用逐回合枚举的方式生成。
  */
 (function (root) {
   'use strict';
@@ -25,6 +32,7 @@
   var COLORS = ['B', 'A', 'Q'];
   var DECKS = ['BBBAQ', 'BBAAQ', 'BBAQQ', 'BAAQQ', 'BAAAQ', 'BAQQQ'];   // 每名从者 5 张牌的全部 6 种配卡
   var HAND = 5;                                                         // 每回合发 5 张
+  var FACT = [1, 1, 2, 6, 24, 120];                                     // 0! ~ 5!（一种牌最多 5 张）
 
   /** 组合数 C(n, k)；这里 n 不超过 15，双精度下完全精确 */
   function comb(n, k) {
@@ -39,13 +47,13 @@
     return a;
   }
 
-  /** 由配卡（如 'BBAAQ'）和纹章开关得到打手的 5 张牌 [{ color, marked }] */
+  /** 由配卡（如 'BBAAQ'）和纹章开关得到一名从者的 5 张牌 [{ color, marked }] */
   function deckCards(deck, marked) {
     return deck.split('').map(function (color, i) { return { color: color, marked: !!(marked && marked[i]) }; });
   }
 
   /**
-   * 把打手的牌分成种类：开了纹章的牌各成一类；没开纹章的同色牌为一类。
+   * 把一名从者的牌分成种类：开了纹章的牌各成一类；没开纹章的同色牌为一类。
    * 返回 [{ key, color, marked, size, members }]，按 B、A、Q 排序，同色时纹章牌在前。
    */
   function cardTypes(cards) {
@@ -65,87 +73,190 @@
     return types;
   }
 
-  /** 第 t 回合可能发出的打手牌张数向量 y：仅含时 y = need；包含时 need ≤ y ≤ remaining */
-  function candidates(remaining, need, exact) {
-    if (exact) {
-      return need.every(function (v, j) { return v <= remaining[j]; }) ? [need.slice()] : [];
-    }
-    var out = [];
-    (function walk(j, y) {
-      if (j === remaining.length) { out.push(y.slice()); return; }
-      for (var v = need[j]; v <= remaining[j]; v++) { y.push(v); walk(j + 1, y); y.pop(); }
-    })(0, []);
-    return out;
-  }
-
   function sum(v) {
     return v.reduce(function (s, x) { return s + x; }, 0);
   }
 
   /**
+   * 一种牌（共 size 张）分到第 from ~ T−1 回合的全部分法 [{ y: [各回合张数], w: 分法数 }]：
+   * 每回合 y_t ≥ need_t；仅含时 y_t = need_t；合计不超过 size（其余的在这几个回合之后才发）。
+   */
+  function splits(size, need, exact, from, T) {
+    var out = [];
+    (function walk(t, y, used, denom) {
+      if (t === T) { out.push({ y: y.slice(), w: FACT[size] / (denom * FACT[size - used]) }); return; }
+      var hi = exact[t] ? need[t] : size - used;
+      for (var v = need[t]; v <= hi && used + v <= size; v++) {
+        y.push(v);
+        walk(t + 1, y, used + v, denom * FACT[v]);
+        y.pop();
+      }
+    })(from, [], 0, 1);
+    return out;
+  }
+
+  /**
+   * 第 from ~ T−1 回合满足条件的发法数（快速算法）。
+   *   sizes:  每种牌还剩几张；need[t][j] / exact[t][j]：第 t 回合第 j 种牌的要求
+   *   others: 还剩几张「其他牌」
+   * 返回 { ways: 发法数, count: 计算过程里的项数 }
+   */
+  function countWays(sizes, need, exact, from, T, others) {
+    var n = T - from;
+    if (n <= 0) return { ways: 1, count: 1 };
+    var states = Math.pow(HAND + 1, n);                  // 状态 = 各回合已发的指定牌张数 k_t（0 ~ 5），按 6 进制编号
+    var ways = new Float64Array(states), count = new Float64Array(states);
+    ways[0] = 1; count[0] = 1;
+    for (var j = 0; j < sizes.length; j++) {
+      var opts = splits(sizes[j], need.map(function (v) { return v[j]; }), exact.map(function (v) { return v[j]; }), from, T);
+      var nw = new Float64Array(states), nc = new Float64Array(states);
+      for (var s = 0; s < states; s++) {
+        if (!ways[s]) continue;
+        for (var o = 0; o < opts.length; o++) {
+          var y = opts[o].y, t2 = s, ok = true, mul = 1, digit;
+          for (var t = 0; t < n; t++, mul *= HAND + 1) {
+            digit = Math.floor(s / mul) % (HAND + 1);
+            if (digit + y[t] > HAND) { ok = false; break; }
+            t2 += y[t] * mul;
+          }
+          if (!ok) continue;
+          nw[t2] += ways[s] * opts[o].w;
+          nc[t2] += count[s];
+        }
+      }
+      ways = nw; count = nc;
+    }
+    var total = 0, terms = 0;
+    for (var st = 0; st < states; st++) {
+      if (!ways[st]) continue;
+      var left = others, f = 1;
+      for (var u = 0, m = 1; u < n; u++, m *= HAND + 1) {
+        var k = Math.floor(st / m) % (HAND + 1);
+        f *= comb(left, HAND - k);
+        left -= HAND - k;
+      }
+      if (!f) continue;
+      total += ways[st] * f;
+      terms += count[st];
+    }
+    return { ways: total, count: terms };
+  }
+
+  /** 第 t 回合可能发出的各种牌张数 y：need ≤ y ≤ 剩余（仅含时 y = need），合计不超过 5 */
+  function candidates(remaining, need, exact) {
+    var out = [];
+    (function walk(j, y, used) {
+      if (j === remaining.length) { out.push(y.slice()); return; }
+      var hi = exact[j] ? need[j] : remaining[j];
+      for (var v = need[j]; v <= hi && used + v <= HAND; v++) { y.push(v); walk(j + 1, y, used + v); y.pop(); }
+    })(0, [], 0);
+    return out;
+  }
+
+  /**
    * 计算发牌概率。
    *   servants: 场上从者数（3 或 2），牌库 N = 5 × servants
-   *   cards:    打手的 5 张牌 [{ color, marked }]（可用 deckCards() 生成）
-   *   turns:    每个回合要求发出的打手牌的下标，例如 [[0, 1]] = 第 1 回合要 0、1 号牌；
-   *             [[0, 1], [2, 3, 4]] = 第 1 回合要 0、1 号，第 2 回合要 2、3、4 号
-   *   mode:     'include'（包含：至少发出这些牌，允许同时发出打手的其他牌）
-   *             'exact'  （仅含：该回合发出的打手牌恰好是这些）
-   * 返回 { favorable, total, probability, types, need, turnTotals, terms }：
+   *   turns:    算前几个回合（共享发牌，1 ~ servants）
+   *   owners:   每名从者一项（最多 servants 项）：null = 不指定；或者
+   *             { cards: 5 张牌 [{ color, marked }]（可用 deckCards() 生成），
+   *               picks: 5 张牌各要求在第几回合发到（0 = 不要求，1 ~ turns），
+   *               exact: 每个回合是否「仅含」[bool × turns] }
+   *   maxTerms: 计算过程最多列出几项（默认 40；传 Infinity 列出全部）
+   * 返回 { favorable, total, probability, servants, turns, N, others, owners（参与计算的从者序号）, types, need, exact,
+   *        turnTotals, terms, termCount, truncated }：
    *   favorable / total 为满足条件的发牌组合数 / 全部组合数（未约分）；
-   *   terms 为求和的每一项 [{ turns: [{ y, others, factors, ways }], ways }]，用于显示计算过程。
+   *   types 为参与计算的牌的种类 [{ owner, key, color, marked, size, members }]；
+   *   terms 为计算过程的前几项 [{ turns: [{ y, others, factors, ways }], ways }]，termCount 为总项数。
    */
-  function dealProbability(opts) {
-    var servants = opts.servants, N = HAND * servants, T = opts.turns.length;
-    if (T < 1 || T > servants) throw new Error('回合数应为 1 ~ ' + servants);
-    if (opts.cards.length !== HAND) throw new Error('打手应有 5 张牌');
+  function compute(opts) {
+    var servants = opts.servants, N = HAND * servants, T = opts.turns;
+    if (!(T >= 1 && T <= servants)) throw new Error('回合数应为 1 ~ ' + servants);
+    var owners = opts.owners || [];
+    if (owners.length > servants) throw new Error('最多 ' + servants + ' 名从者');
+    var maxTerms = opts.maxTerms === undefined ? 40 : opts.maxTerms;
 
-    var types = cardTypes(opts.cards), typeOf = [];
-    types.forEach(function (type, j) { type.members.forEach(function (i) { typeOf[i] = j; }); });
-    var used = {};
-    var need = opts.turns.map(function (indices) {
-      var v = types.map(function () { return 0; });
-      indices.forEach(function (i) {
-        if (used[i]) throw new Error('同一张牌不能指定在两个回合');
-        used[i] = true;
-        v[typeOf[i]]++;
+    // 只有给了条件（指定了牌，或某回合「仅含」）的从者才单独计算；其余从者的牌算作其他牌，结果完全相同
+    var types = [], need = [], exact = [], used = [];
+    for (var t = 0; t < T; t++) { need.push([]); exact.push([]); }
+    owners.forEach(function (o, idx) {
+      if (!o) return;
+      if (o.cards.length !== HAND) throw new Error('每名从者应有 5 张牌');
+      var picks = o.picks || [0, 0, 0, 0, 0], ex = o.exact || [];
+      var active = picks.some(function (p) { return p >= 1 && p <= T; });
+      for (var t = 0; t < T; t++) if (ex[t]) active = true;
+      if (!active) return;
+      used.push(idx);
+      cardTypes(o.cards).forEach(function (type) {
+        types.push({ owner: idx, key: idx + ':' + type.key, color: type.color, marked: type.marked, size: type.size, members: type.members });
+        for (var t = 0; t < T; t++) {
+          need[t].push(type.members.filter(function (i) { return picks[i] === t + 1; }).length);
+          exact[t].push(!!ex[t]);
+        }
       });
-      return v;
     });
-    var exact = opts.mode === 'exact';
+    need.forEach(function (v, t) {
+      if (sum(v) > HAND) throw new Error('第 ' + (t + 1) + ' 回合指定的牌超过 5 张');
+    });
 
+    var tracked = sum(types.map(function (type) { return type.size; }));
+    var others = N - tracked;
     var turnTotals = [];
-    for (var t = 0; t < T; t++) turnTotals.push(comb(N - HAND * t, HAND));
+    for (t = 0; t < T; t++) turnTotals.push(comb(N - HAND * t, HAND));
     var total = turnTotals.reduce(function (p, x) { return p * x; }, 1);
+    var sizes = types.map(function (type) { return type.size; });
+    var fast = countWays(sizes, need, exact, 0, T, others);
 
-    var favorable = 0, terms = [];
+    // 计算过程：逐回合枚举，只列出前 maxTerms 项；后面的回合已经不可能满足时跳过
+    var terms = [];
     (function step(t, remaining, othersLeft, picked, ways) {
-      if (t === T) { favorable += ways; terms.push({ turns: picked.slice(), ways: ways }); return; }
-      candidates(remaining, need[t], exact).forEach(function (y) {
-        var k = sum(y);
-        if (k > HAND) return;
-        var factors = [], w = 1;
+      if (terms.length >= maxTerms) return;
+      if (t === T) { terms.push({ turns: picked.slice(), ways: ways }); return; }
+      candidates(remaining, need[t], exact[t]).forEach(function (y) {
+        if (terms.length >= maxTerms) return;
+        var k = sum(y), factors = [], w = 1;
         y.forEach(function (v, j) {
-          if (v > 0) factors.push({ n: remaining[j], k: v });
+          if (v > 0) factors.push({ n: remaining[j], k: v, type: j });
           w *= comb(remaining[j], v);
         });
         factors.push({ n: othersLeft, k: HAND - k, others: true });
         w *= comb(othersLeft, HAND - k);
         if (!w) return;
+        var rest = remaining.map(function (r, j) { return r - y[j]; });
+        if (t + 1 < T && !countWays(rest, need, exact, t + 1, T, othersLeft - (HAND - k)).ways) return;
         picked.push({ y: y, others: HAND - k, factors: factors, ways: w });
-        step(t + 1, remaining.map(function (r, j) { return r - y[j]; }), othersLeft - (HAND - k), picked, ways * w);
+        step(t + 1, rest, othersLeft - (HAND - k), picked, ways * w);
         picked.pop();
       });
-    })(0, types.map(function (type) { return type.size; }), N - HAND, [], 1);
+    })(0, sizes, others, [], 1);
 
     return {
-      favorable: favorable, total: total, probability: favorable / total,
-      types: types, need: need, turnTotals: turnTotals, terms: terms, servants: servants, mode: opts.mode,
+      favorable: fast.ways, total: total, probability: fast.ways / total,
+      servants: servants, turns: T, N: N, others: others, owners: used, types: types, need: need, exact: exact,
+      turnTotals: turnTotals, terms: terms, termCount: fast.ways ? fast.count : 0, truncated: fast.ways ? terms.length < fast.count : false,
     };
+  }
+
+  /**
+   * 旧的调用方式（只指定打手一名从者，整组统一包含 / 仅含），保留给测试和以前的代码：
+   *   cards: 打手的 5 张牌；turns: 每个回合要求发出的牌的下标，例如 [[0, 1], [2]]；mode: 'include' / 'exact'
+   */
+  function dealProbability(opts) {
+    var T = opts.turns.length, picks = [0, 0, 0, 0, 0], seen = {};
+    opts.turns.forEach(function (indices, t) {
+      indices.forEach(function (i) {
+        if (seen[i]) throw new Error('同一张牌不能指定在两个回合');
+        seen[i] = true;
+        picks[i] = t + 1;
+      });
+    });
+    var ex = [];
+    for (var t = 0; t < T; t++) ex.push(opts.mode === 'exact');
+    return compute({ servants: opts.servants, turns: T, owners: [{ cards: opts.cards, picks: picks, exact: ex }], maxTerms: opts.maxTerms });
   }
 
   var api = {
     COLORS: COLORS, DECKS: DECKS, HAND: HAND,
-    comb: comb, gcd: gcd, deckCards: deckCards, cardTypes: cardTypes, dealProbability: dealProbability,
+    comb: comb, gcd: gcd, deckCards: deckCards, cardTypes: cardTypes, compute: compute, dealProbability: dealProbability,
   };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.Deal = api;

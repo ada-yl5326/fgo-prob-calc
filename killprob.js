@@ -127,10 +127,20 @@
     return xs.map(function (x) { return { x: x, count: countAtLeast(prep, x) }; });
   }
 
+  /**
+   * SL（失败后重来）n 次后的击破率：一共 n + 1 次机会，每次重新抽随机数、互相独立，至少击破一次：
+   *     1 − (1 − p)^(n+1)
+   * 用 log1p / expm1 计算，p 很小时也不损失精度。
+   */
+  function withSL(p, sl) {
+    if (p <= 0 || p >= 1 || !sl) return p;
+    return -Math.expm1((sl + 1) * Math.log1p(-p));
+  }
+
   var api = {
     RAND_COUNT: RAND_COUNT, RAND_VALUES: RAND_VALUES, MAX_CARDS: MAX_CARDS,
     excelFloor: excelFloor, cardOutcomes: cardOutcomes, prepare: prepare, countAtLeast: countAtLeast,
-    exact: exact, damageRange: damageRange, histogram: histogram, curve: curve,
+    exact: exact, damageRange: damageRange, histogram: histogram, curve: curve, withSL: withSL,
   };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.KillProb = api;
