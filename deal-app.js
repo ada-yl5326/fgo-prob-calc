@@ -136,9 +136,11 @@
     const ones = d.alts.map((a, k) => evaluateOne(view(d, k)));
     const bad = ones.findIndex((e) => e.status !== 'ok');
     if (bad >= 0) return { status: 'error', message: (ones.length > 1 ? '条件 ' + (bad + 1) + '：' : '') + ones[bad].message, span: T, servants: d.servants };
-    if (ones.length === 1) return ones[0];
+    // alts / byMask / total：综合页「按条件分别指定伤害组」用（deal.js 的 regionCounts）
+    if (ones.length === 1) return Object.assign({}, ones[0], { alts: 1, byMask: [0, ones[0].r.favorable], total: ones[0].r.total });
     const union = D.computeAny(ones.map((e) => e.opts), MAX_TERMS);
-    return { status: 'ok', r: ones[d.alt].r, union, probability: union.probability, span: T, servants: d.servants };
+    return { status: 'ok', r: ones[d.alt].r, union, probability: union.probability, span: T, servants: d.servants,
+      alts: ones.length, byMask: union.byMask, total: union.total };
   }
 
   // ---------- 文字 ----------
@@ -425,7 +427,13 @@
     return (e.status === 'ok' ? window.KillApp.formatShort(e.probability) : '有误') + ' · ' + span + alts;
   }
 
-  window.DealApp = { store, evaluate, summary };
+  /** 每种条件的文字（不带格式），综合页的条件格用 */
+  const altTexts = (d) => d.alts.map((a, k) => {
+    const s = describe(view(d, k)).replace(/<br>/g, '；').replace(/<[^>]+>/g, '');
+    return turnCount(d) === 1 ? s.replace(/^第 1 回合：?/, '') : s;   // 单回合时不用写「第 1 回合」
+  });
+
+  window.DealApp = { store, evaluate, summary, altTexts };
 
   // ---------- 事件 ----------
 

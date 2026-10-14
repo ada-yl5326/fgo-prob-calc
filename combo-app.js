@@ -3,16 +3,19 @@
   'use strict';
 
   const C = window.Combo;
+  const DealCore = window.Deal;
   const G = window.Groups;
   const Kill = window.KillApp, Deal = window.DealApp;
   const STORAGE_KEY = 'killprob.combo.v1';
   const $ = (id) => document.getElementById(id);
   const esc = G.escapeHtml;
   const short = Kill.formatShort;
+  const fmt = (n) => new Intl.NumberFormat('en-US').format(n);
 
   // ---------- 方案 ----------
 
-  let plan = { turns: 3, kill: [null, null, null], deal: [] };
+  // split[t]：第 t 回合按条件分别指定伤害组 { alts: [伤害组 id | null] × 条件数, other: 伤害组 id | null }，不分条件时为 null
+  let plan = { turns: 3, kill: [null, null, null], deal: [], split: [null, null, null] };
   let notice = '';                                       // 一次性的提示（例如引用的组被删除了）
 
   function load() {
@@ -27,6 +30,12 @@
           .filter((p) => p && typeof p.id === 'string' && p.at >= 0 && p.at < n)
           .map((p) => ({ at: Math.floor(p.at), id: p.id }))
           .sort((a, b) => a.at - b.at),
+        split: Array.from({ length: n }, (_, t) => {
+          const sp = Array.isArray(s.split) ? s.split[t] : null;
+          if (!sp || typeof sp !== 'object' || !Array.isArray(sp.alts)) return null;
+          const id = (x) => (typeof x === 'string' ? x : null);
+          return { alts: sp.alts.slice(0, 5).map(id), other: id(sp.other) };
+        }),
       };
     } catch (e) { /* 忽略 */ }
   }
@@ -49,6 +58,12 @@
       if (id && !Kill.store.get(id)) { removed++; return null; }
       return id;
     });
+    const gone = (id) => id && !Kill.store.get(id);
+    plan.split.forEach((sp) => {
+      if (!sp) return;
+      sp.alts = sp.alts.map((id) => { if (gone(id)) { removed++; return null; } return id; });
+      if (gone(sp.other)) { removed++; sp.other = null; }
+    });
     const before = plan.deal.length;
     plan.deal = plan.deal.filter((p) => Deal.store.get(p.id));
     removed += before - plan.deal.length;
@@ -61,14 +76,43 @@
   }
 
   function dealInfo(id) {
-    const g = Deal.store.get(id), r = Deal.evaluate(g.data);
-    return { name: g.name, rate: r.status === 'ok' ? r.probability : null, span: r.span, servants: r.servants };
+    const g = Deal.store.get(id), r = Deal.evaluate(g.data), ok = r.status === 'ok';
+    return {
+      name: g.name, rate: ok ? r.probability : null, span: r.span, servants: r.servants, alts: g.data.alts.length,
+      regions: ok ? (order) => DealCore.regionCounts(r.byMask, order, r.total) : null,     // 按条件分别指定伤害组时用
+    };
   }
 
   const spanOf = (id) => dealInfo(id).span;
 
   function usage(kind, id) {
-    return kind === 'kill' ? plan.kill.filter((x) => x === id).length : plan.deal.filter((p) => p.id === id).length;
+    if (kind !== 'kill') return plan.deal.filter((p) => p.id === id).length;
+    const inSplit = plan.split.reduce((s, sp) => s + (sp ? sp.alts.filter((x) => x === id).length + (sp.other === id ? 1 : 0) : 0), 0);
+    return plan.kill.filter((x) => x === id).length + inSplit;
+  }
+
+  /**
+   * 分条件的回合跟着发牌组调整：不再被发牌组占用 → 合并回一格；条件数变了 → 补空格或去掉多出来的格。
+   * 返回提示文字（没有变化时为 ''）
+   */
+  function normalizeSplits(r) {
+    const msgs = [];
+    plan.split.forEach((sp, t) => {
+      if (!sp) return;
+      if (r.cover[t] < 0) {
+        plan.kill[t] = sp.alts.find(Boolean) || sp.other || null;
+        plan.split[t] = null;
+        msgs.push('T' + (t + 1) + ' 不再被发牌组占用，已合并成一格');
+        return;
+      }
+      const n = r.placements[r.cover[t]].alts;
+      if (sp.alts.length > n) {
+        if (sp.alts.slice(n).some(Boolean)) msgs.push('T' + (t + 1) + ' 的发牌组现在只有 ' + n + ' 种条件，多出来的条件格已去掉');
+        sp.alts = sp.alts.slice(0, n);
+      }
+      while (sp.alts.length < n) sp.alts.push(null);
+    });
+    return msgs.join('；');
   }
 
   window.ComboApp = { usage };
@@ -76,6 +120,26 @@
   // ---------- 显示 ----------
 
   const rangeText = (from, to) => (to > from ? 'T' + (from + 1) + '–T' + (to + 1) : 'T' + (from + 1));
+
+  function factorLabel(f) {
+    if (f.kind === 'deal') return rangeText(f.turn, f.to) + ' 发牌';
+    if (f.kind === 'mix') return rangeText(f.turn, f.to) + ' 发牌 + 击破（分条件）';
+    return 'T' + (f.turn + 1) + ' 击破';
+  }
+
+  /** 分条件的一轮：按击破率从高到低划分的各块 */
+  function mixDetail(f) {
+    if (f.rate === null) return '';
+    let first = true;
+    const rows = f.regions.filter((x) => x.count).map((x) => {
+      const label = x.alt === 'other' ? '一种条件都不满足（其他）' : '满足条件 ' + (x.alt + 1) + (first ? '' : '（不含上面的）');
+      if (x.alt !== 'other') first = false;
+      return '<div>' + label + '：' + fmt(x.count) + ' 种 × ' + short(x.value) + '</div>';
+    });
+    const multi = f.to > f.turn && f.regions.length > 2;
+    return '<li class="mix-detail">' + rows.join('') + '<div>÷ 全部 ' + fmt(f.total) + ' 种</div>' +
+      (multi ? '<div class="mix-note">占好几个回合时，相当于「看到后面的牌再决定按哪种打」，结果可能略偏高</div>' : '') + '</li>';
+  }
 
   function renderResult(r) {
     const used = plan.kill.some(Boolean) || plan.deal.length;
@@ -107,14 +171,13 @@
       if (freq) html += '<div>' + freq + '</div>';
       if (r.weakest && r.factors.length > 1) {
         const w = r.weakest;
-        html += '<div>拖累最大：' + (w.kind === 'deal' ? rangeText(w.turn, w.to) + ' 发牌「' : 'T' + (w.turn + 1) + ' 击破「') +
-          esc(w.name) + '」' + short(w.rate) + '</div>';
+        html += '<div>拖累最大：' + factorLabel(w) + '「' + esc(w.name) + '」' + short(w.rate) + '</div>';
       }
     }
     if (r.factors.length) {
       html += '<ul class="combo-factors">' + r.factors.map((f) => '<li' + (f === r.weakest && r.factors.length > 1 ? ' class="weak"' : '') + '><span>' +
-        (f.kind === 'deal' ? rangeText(f.turn, f.to) + ' 发牌' : 'T' + (f.turn + 1) + ' 击破') + ' · ' + esc(f.name) + '</span><b>' +
-        (f.rate === null ? '—' : short(f.rate)) + '</b></li>').join('') + '</ul>';
+        factorLabel(f) + ' · ' + esc(f.name) + '</span><b>' + (f.rate === null ? '—' : short(f.rate)) + '</b></li>' +
+        (f.kind === 'mix' ? mixDetail(f) : '')).join('') + '</ul>';
     }
     $('comboNote').innerHTML = html;
   }
@@ -138,6 +201,37 @@
     forced: (p) => '↻ 提前洗牌，需 T' + p.at + ' 有从者退场',
   };
 
+  /** 击破栏的一格：已放伤害组或空格。alt = 条件序号 / 'other'（分条件时），style = 网格位置 */
+  function killCell(k, t, alt, style, target) {
+    const altAttr = alt === undefined ? '' : ' data-alt="' + alt + '"';
+    const pos = style ? ' style="' + style + '"' : '';
+    if (!k) {
+      const empty = alt === 'other' ? '没满足 = 失败' : '不需要击破';
+      return '<button type="button" class="tl-slot' + (target === 'kill' ? ' target' : '') + '" data-slot="kill" data-turn="' + t + '"' + altAttr + pos + '>' + empty + '</button>';
+    }
+    const info = killInfo(k.id);
+    const remove = alt === undefined ? 'data-remove-kill="' + t + '"' : 'data-remove-split="' + t + ':' + alt + '"';
+    return '<div class="tl-item kill' + (target === 'kill' ? ' target' : '') + (k.rate === null ? ' bad' : '') + '" data-slot="kill" data-turn="' + t + '"' + altAttr + pos + '>' +
+      '<span class="tl-grip" data-drag="kill" data-id="' + k.id + '" data-from="' + t + '"' + (alt === undefined ? '' : ' data-from-alt="' + alt + '"') + ' aria-hidden="true">⠿</span>' +
+      '<div class="tl-body"><div class="tl-name">' + esc(k.name) + '</div><div class="tl-rate">' +
+      (k.rate === null ? '未完成' : short(k.rate)) + '</div>' + (info.sl ? '<div class="tl-sub">SL ' + info.sl + ' 次</div>' : '') + '</div>' +
+      '<button type="button" class="tl-remove" ' + remove + ' aria-label="移除">×</button></div>';
+  }
+
+  /** 按条件分别指定的击破格：条件 1 … n 和「其他」，每格放一个伤害组 */
+  function splitCell(r, t, style, target) {
+    const sp = r.splits[t], p = r.placements[r.cover[t]];
+    const texts = Deal.altTexts(Deal.store.get(p.id).data);
+    let html = '<div class="tl-split" style="' + style + '"><div class="tl-split-head"><span>按条件</span>' +
+      '<button type="button" class="tl-merge" data-merge="' + t + '">合并</button></div>';
+    sp.alts.forEach((k, a) => {
+      html += '<div class="tl-split-row"><div class="tl-split-label" title="' + esc(texts[a] || '') + '">条件 ' + (a + 1) +
+        '<span>' + esc(texts[a] || '') + '</span></div>' + killCell(k, t, a, '', target) + '</div>';
+    });
+    html += '<div class="tl-split-row"><div class="tl-split-label">其他<span>一种条件都不满足</span></div>' + killCell(sp.other, t, 'other', '', target) + '</div>';
+    return html + '</div>';
+  }
+
   function renderTimeline(r) {
     const n = plan.turns, target = selected ? selected.kind : null;
     let html = '<div class="tl-h">回合</div><div class="tl-h">发牌</div><div class="tl-h">击破</div>';
@@ -147,19 +241,12 @@
         html += '<button type="button" class="tl-slot' + (target === 'deal' ? ' target' : '') + '" data-slot="deal" data-turn="' + t +
           '" style="grid-row:' + (t + 2) + ';grid-column:2">不要求发牌</button>';
       }
-      const k = r.kills[t];
-      if (!k) {
-        html += '<button type="button" class="tl-slot' + (target === 'kill' ? ' target' : '') + '" data-slot="kill" data-turn="' + t +
-          '" style="grid-row:' + (t + 2) + ';grid-column:3">不需要击破</button>';
-      } else {
-        const info = killInfo(k.id);
-        html += '<div class="tl-item kill' + (target === 'kill' ? ' target' : '') + (k.rate === null ? ' bad' : '') + '" data-slot="kill" data-turn="' + t +
-          '" style="grid-row:' + (t + 2) + ';grid-column:3">' +
-          '<span class="tl-grip" data-drag="kill" data-id="' + k.id + '" data-from="' + t + '" aria-hidden="true">⠿</span>' +
-          '<div class="tl-body"><div class="tl-name">' + esc(k.name) + '</div><div class="tl-rate">' +
-          (k.rate === null ? '未完成' : short(k.rate)) + '</div>' + (info.sl ? '<div class="tl-sub">SL ' + info.sl + ' 次</div>' : '') + '</div>' +
-          '<button type="button" class="tl-remove" data-remove-kill="' + t + '" aria-label="从 T' + (t + 1) + ' 移除">×</button></div>';
-      }
+      const cell = 'grid-row:' + (t + 2) + ';grid-column:3';
+      if (r.splits[t]) html += splitCell(r, t, cell, target);
+      else if (r.cover[t] >= 0) {                        // 被发牌组占用：可以按条件分别指定
+        html += '<div class="tl-cell" style="' + cell + '">' + killCell(r.kills[t], t, undefined, '', target) +
+          '<button type="button" class="tl-split-btn" data-split="' + t + '">按条件分别指定</button></div>';
+      } else html += killCell(r.kills[t], t, undefined, cell, target);
     }
     r.placements.forEach((p, i) => {
       if (p.at >= n) return;
@@ -183,7 +270,13 @@
 
   function render() {
     prune();
-    const r = C.evaluate(plan, killInfo, dealInfo);
+    let r = C.evaluate(plan, killInfo, dealInfo);
+    const changed = normalizeSplits(r);
+    if (changed) {
+      notice = changed;
+      save();
+      r = C.evaluate(plan, killInfo, dealInfo);
+    }
     renderResult(r);
     renderPalette();
     renderTimeline(r);
@@ -195,10 +288,16 @@
 
   let selected = null;                                   // 点选模式：{ kind, id }
 
-  function place(kind, id, turn, from) {
+  /** alt：放进分条件的哪一格（条件序号 / 'other'）；fromAlt：从分条件的哪一格拖过来 */
+  function place(kind, id, turn, from, alt, fromAlt) {
     if (kind === 'kill') {
-      if (from !== undefined && from !== turn) plan.kill[from] = null;
-      plan.kill[turn] = id;
+      const setAt = (t, a, value) => {
+        if (a === undefined || !plan.split[t]) plan.kill[t] = value;
+        else if (a === 'other') plan.split[t].other = value;
+        else plan.split[t].alts[Number(a)] = value;
+      };
+      if (from !== undefined && !(from === turn && fromAlt === alt)) setAt(from, fromAlt, null);
+      setAt(turn, alt, id);
     } else {
       const before = plan.deal.filter((p, i) => i !== from).length;
       C.placeDeal(plan, id, turn, spanOf, from);
@@ -222,6 +321,27 @@
     const b = e.target.closest('button, .tl-item');
     if (!b) return;
     if (b.dataset.removeKill !== undefined) { plan.kill[Number(b.dataset.removeKill)] = null; commit(); return; }
+    if (b.dataset.removeSplit !== undefined) {
+      const [t, a] = b.dataset.removeSplit.split(':');
+      if (a === 'other') plan.split[Number(t)].other = null;
+      else plan.split[Number(t)].alts[Number(a)] = null;
+      commit();
+      return;
+    }
+    if (b.dataset.split !== undefined) {                 // 按条件分别指定：每个条件格先放原来的伤害组
+      const t = Number(b.dataset.split), r0 = C.evaluate(plan, killInfo, dealInfo), n = r0.placements[r0.cover[t]].alts;
+      plan.split[t] = { alts: Array.from({ length: n }, () => plan.kill[t]), other: null };
+      plan.kill[t] = null;
+      commit();
+      return;
+    }
+    if (b.dataset.merge !== undefined) {                 // 合并：留下条件 1 的伤害组
+      const t = Number(b.dataset.merge), sp = plan.split[t];
+      plan.kill[t] = sp.alts.find(Boolean) || sp.other || null;
+      plan.split[t] = null;
+      commit();
+      return;
+    }
     if (b.dataset.removeDeal !== undefined) { plan.deal.splice(Number(b.dataset.removeDeal), 1); commit(); return; }
     if (b.classList.contains('gchip')) {
       const kind = b.dataset.drag, id = b.dataset.id;
@@ -232,7 +352,7 @@
     if (b.dataset.slot && selected && selected.kind === b.dataset.slot) {
       const { kind, id } = selected;
       selected = null;
-      place(kind, id, slotTurn(b, e.clientY));
+      place(kind, id, slotTurn(b, e.clientY), undefined, b.dataset.alt);
     }
   });
 
@@ -241,6 +361,7 @@
     if (plan.turns <= 1) return;
     plan.turns--;
     plan.kill.pop();
+    plan.split.pop();
     plan.deal = plan.deal.filter((p) => p.at < plan.turns);
     commit();
   });
@@ -249,6 +370,7 @@
     G.confirmBox('清空方案里放好的组？\n伤害组、发牌组本身不会删除。', { ok: '清空方案', danger: true }).then((yes) => {
       if (!yes) return;
       plan.kill = plan.kill.map(() => null);
+      plan.split = plan.split.map(() => null);
       plan.deal = [];
       selected = null;
       commit();
@@ -314,7 +436,7 @@
     if (d.hover) d.hover.classList.remove('drop-hover');
     if (drop && d.hover) {
       selected = null;
-      place(d.kind, d.id, slotTurn(d.hover, d.y), d.from);
+      place(d.kind, d.id, slotTurn(d.hover, d.y), d.from, d.hover.dataset.alt, d.fromAlt);
     }
   }
 
@@ -323,7 +445,7 @@
     if (!src || e.button > 0) return;
     drag = {
       src, kind: src.dataset.drag, id: src.dataset.id, pointerId: e.pointerId,
-      from: src.dataset.from === undefined ? undefined : Number(src.dataset.from),
+      from: src.dataset.from === undefined ? undefined : Number(src.dataset.from), fromAlt: src.dataset.fromAlt,
       x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, started: false, hover: null,
     };
   });

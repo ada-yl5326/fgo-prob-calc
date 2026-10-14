@@ -298,13 +298,14 @@
    *     满足任意一种的组合数 = Σ 单个 − Σ 两两同时满足 + Σ 三个同时满足 − …
    * 「同时满足」的条件由 intersect() 得到，仍是普通的条件，用 compute() 精确计算；组合数都是整数，没有误差。
    * 返回 { favorable, total, probability, alternatives: 每种条件各自的 compute() 结果,
-   *        parts: [{ set: 条件序号, sign: +1 / −1, favorable, opts: 同时满足时的条件（不可能时为 null） }] }
+   *        parts: [{ set: 条件序号, sign: +1 / −1, favorable, opts: 同时满足时的条件（不可能时为 null） }],
+   *        byMask: byMask[m] = 条件集合 m（二进制，第 i 位 = 条件 i）同时满足的组合数，regionCounts() 用 }
    */
   function computeAny(list, maxTerms) {
     var alternatives = list.map(function (q) {
       return compute({ servants: q.servants, turns: q.turns, owners: q.owners, maxTerms: maxTerms });
     });
-    var k = list.length, favorable = 0, parts = [];
+    var k = list.length, favorable = 0, parts = [], byMask = [0];
     for (var mask = 1; mask < (1 << k); mask++) {
       var set = [], opts = null, possible = true;
       for (var i = 0; i < k; i++) {
@@ -317,6 +318,7 @@
         : possible ? compute({ servants: opts.servants, turns: opts.turns, owners: opts.owners, maxTerms: 0 }).favorable : 0;
       var sign = set.length % 2 ? 1 : -1;
       favorable += sign * fav;
+      byMask[mask] = fav;
       parts.push({ set: set, sign: sign, favorable: fav, opts: possible ? opts : null });
     }
     parts.sort(function (x, y) {                         // 先列单个条件，再列两两、三个……同时满足
@@ -324,7 +326,32 @@
       return x.set.join() < y.set.join() ? -1 : 1;
     });
     var total = alternatives[0].total;
-    return { favorable: favorable, total: total, probability: favorable / total, alternatives: alternatives, parts: parts };
+    return { favorable: favorable, total: total, probability: favorable / total, alternatives: alternatives, parts: parts, byMask: byMask };
+  }
+
+  /**
+   * 几种条件按优先顺序划分发牌结果（综合页「按条件分别指定伤害组」用）：
+   * 一手牌满足好几种条件时，算作 order 里排在最前面的那种（综合页按击破率从高到低排，即玩家会选打得最好的那种）。
+   *     第 i 块 = 满足条件 order[i]、但不满足排在它前面的任何条件
+   *             = Σ_{S ⊆ 前面的条件} (−1)^|S| × 「条件 order[i] 和 S 同时满足」的组合数（容斥原理）
+   * byMask 来自 computeAny()（只有一种条件时为 [0, 组合数]）；total = 全部组合数。
+   * 返回 { counts: 第 i 块的组合数（与 order 对应）, other: 一种条件都不满足的组合数, total }
+   */
+  function regionCounts(byMask, order, total) {
+    var counts = [], before = 0;
+    order.forEach(function (k) {
+      var c = 0;
+      for (var sub = before; ; sub = (sub - 1) & before) {          // 枚举「前面的条件」的所有子集
+        var bits = 0;
+        for (var x = sub; x; x &= x - 1) bits++;
+        c += (bits % 2 ? -1 : 1) * byMask[sub | (1 << k)];
+        if (!sub) break;
+      }
+      counts.push(c);
+      before |= 1 << k;
+    });
+    var covered = counts.reduce(function (s, c) { return s + c; }, 0);
+    return { counts: counts, other: total - covered, total: total };
   }
 
   /**
@@ -348,7 +375,7 @@
   var api = {
     COLORS: COLORS, DECKS: DECKS, HAND: HAND,
     comb: comb, gcd: gcd, deckCards: deckCards, cardTypes: cardTypes, compute: compute, dealProbability: dealProbability,
-    intersect: intersect, computeAny: computeAny,
+    intersect: intersect, computeAny: computeAny, regionCounts: regionCounts,
   };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.Deal = api;

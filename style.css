@@ -596,6 +596,19 @@ button:disabled { opacity: 0.4; cursor: default; }
   line-height: 1.2;
   border-radius: 0 0 0 8px;
 }
+/* 击破栏按条件分别指定（发牌组有几种条件时） */
+.tl-cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.tl-cell > .tl-slot, .tl-cell > .tl-item { flex: 1; }
+.tl-split-btn { padding: 2px 8px; font-size: 11px; color: var(--accent); border-style: dashed; }
+.tl-split { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 6px; border: 1px solid var(--border); border-radius: 10px; }
+.tl-split-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 600; color: var(--muted); }
+.tl-merge { padding: 1px 8px; font-size: 11px; }
+.tl-split-row { min-width: 0; }
+.tl-split-label { font-size: 11px; font-weight: 600; color: var(--muted); margin: 2px 0; line-height: 1.4; overflow-wrap: anywhere; }
+.tl-split-label span { font-weight: 400; margin-left: 4px; }
+.tl-split .tl-slot, .tl-split .tl-item { width: 100%; min-height: 42px; }
+.combo-factors .mix-detail { display: block; padding: 2px 0 4px 12px; border-top: 0; font-size: 12px; color: var(--muted); }
+.combo-factors .mix-note { color: var(--gold); }
 .tl-slot.target, .tl-item.target, .drop-kill [data-slot="kill"], .drop-deal [data-slot="deal"] { border-color: var(--accent); }
 .tl-slot.target, .drop-kill .tl-slot[data-slot="kill"], .drop-deal .tl-slot[data-slot="deal"] { color: var(--accent); background: var(--accent-soft); }
 .drop-hover { box-shadow: 0 0 0 3px var(--focus); background: var(--accent-soft) !important; }
