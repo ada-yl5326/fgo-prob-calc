@@ -138,6 +138,16 @@ h1 {
 .field.invalid .field-hint { color: var(--danger); }
 .field-hp { margin-top: 6px; }
 
+/* AOE 其他目标：每行（群体伤害，敌方 HP） */
+.aoe { margin: 6px 0 8px; }
+.aoe-row { border-top: 1px dashed var(--border); padding-top: 8px; margin-bottom: 4px; }
+.aoe-row-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.aoe-row-head .field-name { margin: 0; }
+.aoe-remove { padding: 0 10px; font-size: 16px; line-height: 24px; }
+.aoe-add { width: 100%; border-style: dashed; color: var(--accent); padding: 7px 0; }
+.aoe-add:disabled { color: var(--muted); opacity: 0.6; cursor: default; }
+.aoe-tip { margin-top: 4px; font-size: 12px; color: var(--muted); }
+
 .actions { display: flex; justify-content: flex-end; margin-top: 4px; }
 button {
   font: inherit;
@@ -245,6 +255,16 @@ footer { text-align: center; font-size: 12px; color: var(--muted); margin-top: 8
 .seg button { border: 0; border-radius: 7px; padding: 6px 12px; font-size: 14px; color: var(--muted); white-space: nowrap; }
 .seg button.on { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15); }
 .option-hint { margin-top: 10px; font-size: 12px; line-height: 1.6; color: var(--muted); }
+
+/* 发牌：「或者」的几种条件 */
+.alts .owner-add { margin-bottom: 0; }
+.alt-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.alt-seg { flex-wrap: wrap; }
+.alt-add { color: var(--accent); border-style: dashed; }
+.alt-remove { margin-left: 6px; padding: 1px 10px; font-size: 12px; color: var(--danger); }
+.result-note .alt-on { color: var(--text); }
+.steps .union li + li { margin-top: 2px; }
+.steps .union-sub { margin-top: 10px; font-weight: 600; color: var(--text); }
 
 .panel-sub { font-size: 12px; font-weight: 400; color: var(--muted); margin-left: 4px; }
 .c-B { color: var(--buster); }

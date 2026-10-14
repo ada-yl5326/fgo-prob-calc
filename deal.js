@@ -20,6 +20,8 @@
  *         组合数逐回合相乘，总数 = C(N, 5) × C(N − 5, 5) × …。
  *     「包含」对所有满足条件的 y 一起求和：前面回合多发的牌会让后面回合可用的牌变少，这些情况自动是 0，所以不会算错。
  *
+ * 「或者」（几种条件满足任意一种）：用容斥原理，见 computeAny()。
+ *
  * 快速算法：几个回合的组合数之积可以按种类拆开——
  *     Π_回合 Π_种类 C(剩余, y) = Π_种类 [n! / (y_1! … y_T! (n − Σy)!)]（每种牌分到各回合的分法），
  *     其他牌的组合数只和每回合发了几张指定从者的牌 k_t 有关。
@@ -236,6 +238,95 @@
     };
   }
 
+  /** 一名从者第 t 回合每种牌要发到几张：need[t][j]（只看 1 ~ T 回合） */
+  function needOf(owner, types, T) {
+    var picks = (owner && owner.picks) || [0, 0, 0, 0, 0], out = [];
+    for (var t = 0; t < T; t++) {
+      out.push(types.map(function (type) {
+        return type.members.filter(function (i) { return picks[i] === t + 1; }).length;
+      }));
+    }
+    return out;
+  }
+
+  /**
+   * 两组条件同时满足时的条件（容斥原理用）。a、b 是 compute() 的参数：场上人数、回合数、各从者的牌相同，只有 picks / exact 不同。
+   * 每名从者、每个回合、每种牌：
+   *     包含 + 包含 → 包含，张数取较多的；
+   *     仅含 + 包含 → 仅含，仅含的张数都不少于包含的才可能；
+   *     仅含 + 仅含 → 两者完全相同才可能（没指定牌的仅含 = 一张都不能有）。
+   * 再换算回「每张牌在第几回合发到」：同种牌按顺序分配，某种牌各回合合计超过这种牌的张数、或某回合超过 5 张时不可能。
+   * 返回新的参数；不可能同时满足时返回 null。
+   */
+  function intersect(a, b) {
+    var T = a.turns, owners = [], perTurn = [];
+    for (var t = 0; t < T; t++) perTurn.push(0);
+    for (var o = 0; o < a.servants; o++) {
+      var oa = a.owners[o] || null, ob = b.owners[o] || null, base = oa || ob;
+      if (!base) { owners.push(null); continue; }
+      var types = cardTypes(base.cards), na = needOf(oa, types, T), nb = needOf(ob, types, T);
+      var picks = [0, 0, 0, 0, 0], exact = [], need = [];
+      for (t = 0; t < T; t++) {
+        var ea = !!(oa && oa.exact && oa.exact[t]), eb = !!(ob && ob.exact && ob.exact[t]), row = [];
+        for (var j = 0; j < types.length; j++) {
+          var x = na[t][j], y = nb[t][j];
+          if (ea && eb ? x !== y : ea ? x < y : eb ? y < x : false) return null;
+          row.push(ea ? x : eb ? y : Math.max(x, y));
+        }
+        need.push(row);
+        exact.push(ea || eb);
+      }
+      for (j = 0; j < types.length; j++) {
+        var next = 0;
+        for (t = 0; t < T; t++) {
+          for (var c = 0; c < need[t][j]; c++) {
+            if (next >= types[j].members.length) return null;          // 这种牌不够分
+            picks[types[j].members[next++]] = t + 1;
+          }
+          perTurn[t] += need[t][j];
+        }
+      }
+      owners.push({ cards: base.cards, picks: picks, exact: exact });
+    }
+    for (t = 0; t < T; t++) if (perTurn[t] > HAND) return null;
+    return { servants: a.servants, turns: T, owners: owners };
+  }
+
+  /**
+   * 几种条件满足任意一种（「或者」）的概率。list = 几组 compute() 的参数（场上人数、回合数、各从者的牌相同）。
+   * 几种条件可能同时满足，直接相加会重复计算，所以用容斥原理：
+   *     满足任意一种的组合数 = Σ 单个 − Σ 两两同时满足 + Σ 三个同时满足 − …
+   * 「同时满足」的条件由 intersect() 得到，仍是普通的条件，用 compute() 精确计算；组合数都是整数，没有误差。
+   * 返回 { favorable, total, probability, alternatives: 每种条件各自的 compute() 结果,
+   *        parts: [{ set: 条件序号, sign: +1 / −1, favorable, opts: 同时满足时的条件（不可能时为 null） }] }
+   */
+  function computeAny(list, maxTerms) {
+    var alternatives = list.map(function (q) {
+      return compute({ servants: q.servants, turns: q.turns, owners: q.owners, maxTerms: maxTerms });
+    });
+    var k = list.length, favorable = 0, parts = [];
+    for (var mask = 1; mask < (1 << k); mask++) {
+      var set = [], opts = null, possible = true;
+      for (var i = 0; i < k; i++) {
+        if (!(mask & (1 << i))) continue;
+        set.push(i);
+        if (possible) opts = opts ? intersect(opts, list[i]) : list[i];
+        if (!opts) possible = false;
+      }
+      var fav = set.length === 1 ? alternatives[set[0]].favorable
+        : possible ? compute({ servants: opts.servants, turns: opts.turns, owners: opts.owners, maxTerms: 0 }).favorable : 0;
+      var sign = set.length % 2 ? 1 : -1;
+      favorable += sign * fav;
+      parts.push({ set: set, sign: sign, favorable: fav, opts: possible ? opts : null });
+    }
+    parts.sort(function (x, y) {                         // 先列单个条件，再列两两、三个……同时满足
+      if (x.set.length !== y.set.length) return x.set.length - y.set.length;
+      return x.set.join() < y.set.join() ? -1 : 1;
+    });
+    var total = alternatives[0].total;
+    return { favorable: favorable, total: total, probability: favorable / total, alternatives: alternatives, parts: parts };
+  }
+
   /**
    * 旧的调用方式（只指定打手一名从者，整组统一包含 / 仅含），保留给测试和以前的代码：
    *   cards: 打手的 5 张牌；turns: 每个回合要求发出的牌的下标，例如 [[0, 1], [2]]；mode: 'include' / 'exact'
@@ -257,6 +348,7 @@
   var api = {
     COLORS: COLORS, DECKS: DECKS, HAND: HAND,
     comb: comb, gcd: gcd, deckCards: deckCards, cardTypes: cardTypes, compute: compute, dealProbability: dealProbability,
+    intersect: intersect, computeAny: computeAny,
   };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.Deal = api;

@@ -140,10 +140,27 @@
     return Math.min(-Math.expm1((sl + 1) * Math.log1p(-p)), SL_CAP);
   }
 
+  /**
+   * 一回合的击破率：几个目标都要击破（主目标 + AOE 打到的其他目标），各目标的随机数互相独立，
+   *     单次击破率 = 各目标击破率相乘，SL n 次后 = 1 − (1 − 单次)^(n+1)
+   * parts = [{ kills, total }]（每个目标的击破组合数 / 组合总数）。
+   * 返回 { single, fail, final }：fail = SL 后仍失败的概率，单独算，击破率接近 100% 时不丢精度。
+   */
+  function turnRate(parts, sl) {
+    var single = 1, logP = 0, sure = true;
+    parts.forEach(function (p) {
+      single *= p.kills / p.total;
+      logP += Math.log1p(-(p.total - p.kills) / p.total);
+      if (p.kills !== p.total) sure = false;
+    });
+    var miss = parts.length === 1 ? (parts[0].total - parts[0].kills) / parts[0].total : -Math.expm1(logP);
+    return { single: single, fail: Math.pow(miss, (sl || 0) + 1), final: sure ? 1 : withSL(single, sl) };
+  }
+
   var api = {
     RAND_COUNT: RAND_COUNT, RAND_VALUES: RAND_VALUES, MAX_CARDS: MAX_CARDS,
     excelFloor: excelFloor, cardOutcomes: cardOutcomes, prepare: prepare, countAtLeast: countAtLeast,
-    exact: exact, damageRange: damageRange, histogram: histogram, curve: curve, withSL: withSL,
+    exact: exact, damageRange: damageRange, histogram: histogram, curve: curve, withSL: withSL, turnRate: turnRate,
   };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.KillProb = api;

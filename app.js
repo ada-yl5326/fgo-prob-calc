@@ -1,4 +1,5 @@
-// 击破概率页面：伤害组（每组 4 张卡的均伤、HP、SL 次数）→ 调用 killprob.js 计算 → 显示击破概率、SL 表、伤害分布图和击破概率曲线
+// 击破概率页面：伤害组（每组 4 张卡的均伤、HP、最多 5 个 AOE 其他目标、SL 次数）→ 调用 killprob.js 计算
+// → 显示击破概率、SL 表、伤害分布图和击破概率曲线
 (function () {
   'use strict';
 
@@ -7,6 +8,7 @@
   const CURVE_SEGMENTS = 120;                            // 击破概率曲线约 120 段（每个点都精确计算）
   const MAX_SL = 999;
   const SL_ROWS = 5;                                     // SL 表至少列出 0 ~ 5 次
+  const MAX_AOE = 5;                                     // AOE 其他目标最多 5 个
 
   const $ = (id) => document.getElementById(id);
   const cardInputs = [0, 1, 2, 3].map((i) => $('card' + i));
@@ -14,6 +16,8 @@
   const slInput = $('sl');
   const inputs = cardInputs.concat(hpInput, slInput);
   const fields = [0, 1, 2, 3, 4, 5].map((i) => $('field' + i));
+  const aoeInputs = () => Array.from($('aoeList').querySelectorAll('input'));
+  const orderedInputs = () => cardInputs.concat(hpInput, aoeInputs(), slInput);   // 按 Enter 跳到下一格的顺序
 
   const intFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
   const fmt = (n) => intFormat.format(n);
@@ -54,10 +58,17 @@
     el.value = fmt(Number(intPart || '0')) + (frac === undefined ? '' : '.' + frac);
   }
 
-  function setHint(i, text, invalid) {
-    const hint = fields[i].querySelector('.field-hint');
+  function hintOn(field, text, invalid) {
+    const hint = field.querySelector('.field-hint');
     hint.textContent = text || hint.dataset.default || '';
-    fields[i].classList.toggle('invalid', !!invalid);
+    field.classList.toggle('invalid', !!invalid);
+  }
+  const setHint = (i, text, invalid) => hintOn(fields[i], text, invalid);
+
+  /** 一张卡的伤害范围提示，例如「65,160 ~ 79,567」 */
+  function rangeText(avg) {
+    const o = K.cardOutcomes(avg);
+    return fmt(o[0]) + ' ~ ' + fmt(o[o.length - 1]);
   }
 
   // ---------- 计算（击破概率页和综合页共用） ----------
@@ -76,25 +87,37 @@
     return prep;
   }
 
+  /** AOE 目标：一张卡（群体伤害）的 200 个随机数里，伤害 >= HP 的个数 */
+  const aoeKills = (avg, hp) => K.cardOutcomes(avg).filter((x) => x >= hp).length;
+
   /**
-   * 算一个伤害组：返回 { status: 'ok', single, final, sl, kills, total, prep, hp, avgs }
-   * 或 { status: 'idle' | 'error', message, parsed }
+   * 算一个伤害组：返回 { status: 'ok', single, final, fail, sl, kills, total, prep, hp, avgs, aoeCount, aoeFactor }
+   * 或 { status: 'idle' | 'error', message, parsed }。
+   * 有 AOE 其他目标时：每个目标单独抽随机数，全部击破才算，单次击破率 = 主目标 × 各 AOE 目标；SL 按单次击破率算
    */
   function evaluate(data) {
     const cards = data.cards.map(parse), hp = parse(data.hp), sl = parseSL(data.sl);
-    const parsed = { cards, hp, sl };
+    const aoe = (data.aoe || []).map((a) => ({ dmg: parse(a.dmg), hp: parse(a.hp) }));
+    const aoeParts = aoe.map((a) => (a.dmg.error || a.hp.error || a.dmg.empty || a.hp.empty ? null
+      : { kills: aoeKills(a.dmg.value, a.hp.value), total: K.RAND_COUNT }));
+    const parsed = { cards, hp, sl, aoe, aoeParts };
+    const aoeError = aoe.some((a) => a.dmg.error || a.hp.error);
     const cardsOk = !cards.some((r) => r.error) && !cards.every((r) => r.empty);
     const avgs = cards.map((r) => r.value);
     const prep = cardsOk ? prepared(avgs) : null;      // 均伤填好了就先算总伤害范围、平均（不用等 HP）
-    if (!cardsOk || hp.error || sl.error) {
-      if (cards.every((r) => r.empty) && !cards.some((r) => r.error) && !hp.error && !sl.error) return { status: 'idle', message: '输入均伤和 HP 后自动计算', parsed };
+    if (!cardsOk || hp.error || sl.error || aoeError) {
+      if (cards.every((r) => r.empty) && !cards.some((r) => r.error) && !hp.error && !sl.error && !aoeError) return { status: 'idle', message: '输入均伤和 HP 后自动计算', parsed };
       return { status: 'error', message: '请检查标红的输入', parsed, prep };
     }
     if (hp.empty) return { status: 'idle', message: '再输入 HP 就能算出击破概率', parsed, prep };
+    const half = aoe.findIndex((a) => a.dmg.empty !== a.hp.empty);   // 只填了一半的 AOE 目标（两格都空的不算）
+    if (half >= 0) return { status: 'idle', message: 'AOE 目标 ' + (half + 1) + ' 还要填' + (aoe[half].dmg.empty ? '群体伤害' : '敌方 HP'), parsed, prep };
     const kills = K.countAtLeast(prep, hp.value);
-    const single = kills / prep.total;
-    const fail = Math.pow((prep.total - kills) / prep.total, sl.value + 1);   // 失败率单独算，击破率接近 100% 时不丢精度
-    return { status: 'ok', single, final: kills === prep.total ? 1 : withSL(single, sl.value), fail, sl: sl.value, kills, total: prep.total, prep, hp: hp.value, avgs, parsed };
+    const others = aoeParts.filter(Boolean);
+    const t = K.turnRate([{ kills, total: prep.total }].concat(others), sl.value);
+    const aoeFactor = others.reduce((s, q) => s * (q.kills / q.total), 1);
+    return { status: 'ok', single: t.single, final: t.final, fail: t.fail, sl: sl.value, kills, total: prep.total, prep, hp: hp.value, avgs, parsed,
+      aoeCount: others.length, aoeFactor };
   }
 
   /** 百分比，保留 4 位小数；接近 0 或 100% 时不写成 0% / 100% */
@@ -144,13 +167,15 @@
     const str = (v) => (typeof v === 'string' ? v : '');
     const cards = Array.isArray(raw.cards) ? raw.cards.slice(0, 4).map(str) : [];
     while (cards.length < 4) cards.push('');
-    return { cards, hp: str(raw.hp), sl: str(raw.sl) };
+    const aoe = (Array.isArray(raw.aoe) ? raw.aoe : []).filter((a) => a && typeof a === 'object').slice(0, MAX_AOE)
+      .map((a) => ({ dmg: str(a.dmg), hp: str(a.hp) }));
+    return { cards, hp: str(raw.hp), sl: str(raw.sl), aoe };
   }
 
   const store = new G.GroupStore({
     key: 'killprob.kill.v2', label: '伤害组', idPrefix: 'k',
     naming: (n) => '伤害组' + n,
-    create: () => ({ cards: ['', '', '', ''], hp: '', sl: '' }),
+    create: () => ({ cards: ['', '', '', ''], hp: '', sl: '', aoe: [] }),
     clean: cleanData,
     legacy: () => {                                      // v0.3 只有一组：[4 张卡, HP]
       try {
@@ -174,7 +199,39 @@
     cardInputs.forEach((el, i) => { el.value = d.cards[i]; });
     hpInput.value = d.hp;
     slInput.value = d.sl;
-    inputs.forEach(prettify);
+    renderAoe(d.aoe);
+    orderedInputs().forEach(prettify);
+  }
+
+  // ---------- AOE 其他目标：每行（群体伤害，敌方 HP） ----------
+
+  function aoeField(i, key, name, placeholder) {
+    return '<label class="field" data-field="' + key + '"><span class="field-name">' + name + '</span>' +
+      '<input type="text" inputmode="decimal" enterkeyhint="next" autocomplete="off" data-row="' + i + '" data-key="' + key + '" placeholder="' + placeholder + '">' +
+      '<span class="field-hint"></span></label>';
+  }
+
+  function renderAoe(list) {
+    $('aoeList').innerHTML = list.map((a, i) =>
+      '<div class="aoe-row"><div class="aoe-row-head"><span class="field-name">AOE 目标 ' + (i + 1) + '</span>' +
+      '<button type="button" class="aoe-remove" data-remove="' + i + '" aria-label="删除 AOE 目标 ' + (i + 1) + '">×</button></div>' +
+      '<div class="cards">' + aoeField(i, 'dmg', '群体伤害', '均伤') + aoeField(i, 'hp', '敌方 HP', '击破血量') + '</div></div>').join('');
+    aoeInputs().forEach((el) => { el.value = list[el.dataset.row][el.dataset.key]; });
+    $('aoeAdd').disabled = list.length >= MAX_AOE;
+    $('aoeAdd').textContent = list.length >= MAX_AOE ? '最多 ' + MAX_AOE + ' 个 AOE 目标' : '＋ AOE 其他目标';
+  }
+
+  /** AOE 各行的提示：群体伤害的范围、这个目标的击破率 */
+  function aoeHints(parsed) {
+    $('aoeList').querySelectorAll('.aoe-row').forEach((row, i) => {
+      const a = parsed.aoe[i], part = parsed.aoeParts[i];
+      if (!a) return;
+      const fd = row.querySelector('[data-field="dmg"]'), fh = row.querySelector('[data-field="hp"]');
+      if (a.dmg.error) hintOn(fd, a.dmg.error, true);
+      else hintOn(fd, a.dmg.empty ? '' : rangeText(a.dmg.value));
+      if (a.hp.error) hintOn(fh, a.hp.error, true);
+      else hintOn(fh, part ? '击破率 ' + formatShort(part.kills / part.total) : '');
+    });
   }
 
   function saveInputs() {
@@ -221,13 +278,11 @@
     cards.forEach((c, i) => {
       if (c.error) setHint(i, c.error, true);
       else if (c.empty) setHint(i, '');
-      else {
-        const o = K.cardOutcomes(c.value);
-        setHint(i, fmt(o[0]) + ' ~ ' + fmt(o[o.length - 1]));
-      }
+      else setHint(i, rangeText(c.value));
     });
     setHint(4, hp.error, !!hp.error);
     setHint(5, sl.error, !!sl.error);
+    aoeHints(r.parsed);
     if (r.status !== 'ok') return showIdle(r.message, r.prep);
 
     const { prep, kills } = r;
@@ -238,17 +293,24 @@
     $('meterFill').style.width = r.final * 100 + '%';
 
     const lines = [];
-    if (r.sl) lines.push('单次击破率 ' + formatPct(r.single) + '，失败后可以重来 ' + r.sl + ' 次');
+    if (r.aoeCount) {                                    // 单次击破率 = 主目标 × 各 AOE 目标
+      const parts = r.parsed.aoeParts.map((q, i) => (q ? ' × AOE ' + (i + 1) + ' ' + formatShort(q.kills / q.total) : '')).join('');
+      lines.push((r.sl ? '单次击破率 ' + formatPct(r.single) : '击破率') + ' = 主目标 ' + formatShort(kills / prep.total) + parts);
+      if (r.sl) lines.push('失败后可以重来 ' + r.sl + ' 次');
+    } else if (r.sl) lines.push('单次击破率 ' + formatPct(r.single) + '，失败后可以重来 ' + r.sl + ' 次');
     const freq = frequencyText(r.final, r.fail, '击破', '失败');
     if (freq) lines.push(freq);
-    $('note').innerHTML = noteHtml(lines.concat(damageLines(prep, r.hp)));
+    const dmg = damageLines(prep, r.hp);
+    if (r.aoeCount) dmg[0] = '主目标' + dmg[0];
+    $('note').innerHTML = noteHtml(lines.concat(dmg));
 
     renderSLTable(r);
 
-    $('legendKill').textContent = '击破 ' + formatShort(kills / prep.total);
+    $('legendKill').textContent = (r.aoeCount ? '主目标击破 ' : '击破 ') + formatShort(kills / prep.total);
     $('legendMiss').textContent = '未击破 ' + formatShort(1 - kills / prep.total);
     $('chartPanel').hidden = false;
-    chartState = { hp: r.hp, sl: r.sl, kills, total: prep.total, min: prep.min, max: prep.max, prep, bins: null, points: null };
+    chartState = { hp: r.hp, sl: r.sl, kills, total: prep.total, min: prep.min, max: prep.max, prep, bins: null, points: null,
+      aoeCount: r.aoeCount, aoe: r.aoeFactor };
     drawChart();
   }
 
@@ -294,12 +356,21 @@
     $('legend').hidden = chartMode !== 'dist';
     $('legendCurve').hidden = chartMode !== 'curve' || !chartState || !chartState.sl;
     if (chartState && chartState.sl) $('legendSL').textContent = 'SL ' + chartState.sl + ' 次后';
-    $('chartCaption').textContent = CAPTIONS[chartMode] +
+    $('chartCaption').textContent = caption() +
       (chartMode === 'curve' && chartState && chartState.sl ? '；紫色是 SL ' + chartState.sl + ' 次后的击破率' : '');
     const box = $('chart');
     if (!chartState) { box.innerHTML = ''; return; }
     if (chartMode === 'dist') drawDistribution(box);
     else drawCurve(box);
+  }
+
+  /** 有 AOE 目标时：图表画的是主目标的总伤害；曲线高度乘上 AOE 目标的击破率，即主目标 HP 为 X 时本回合的击破率 */
+  function caption() {
+    const s = chartState;
+    if (!s || !s.aoeCount) return CAPTIONS[chartMode];
+    if (chartMode === 'dist') return CAPTIONS.dist.replace('总伤害', '主目标总伤害');
+    if (s.aoe >= 1) return CAPTIONS.curve.replace('总伤害', '主目标总伤害').replace('HP 为 X', '主目标 HP 为 X');
+    return '曲线高度 = 主目标 HP 为 X 时本回合的击破率（主目标的击破率 × AOE 目标的 ' + formatShort(s.aoe) + '）；虚线是现在的 HP';
   }
 
   function chartSize(box, pad) {
@@ -357,27 +428,47 @@
     if (active !== null) {
       const x = Math.min(Math.max(bins[active].from, min), max);
       const sum = bins.slice(active).reduce((acc, b) => acc + b.count, 0);   // = 1 − P(总伤害 ≤ x − 1)
-      readout = '总伤害 ≥ ' + fmt(x) + ' 的概率：' + formatShort(sum / total) + '（即 HP 为 ' + fmt(x) + ' 时的击破率' +
-        slSuffix(sum / total, s.sl, '；') + '）';
+      if (s.aoeCount && s.aoe < 1) {
+        const turn = (sum / total) * s.aoe;
+        readout = '主目标总伤害 ≥ ' + fmt(x) + ' 的概率：' + formatShort(sum / total) + '（主目标 HP 为 ' + fmt(x) + ' 时，本回合击破率 ' +
+          formatShort(turn) + slSuffix(turn, s.sl, '，') + '）';
+      } else {
+        readout = (s.aoeCount ? '主目标' : '') + '总伤害 ≥ ' + fmt(x) + ' 的概率：' + formatShort(sum / total) + '（即 HP 为 ' + fmt(x) + ' 时的击破率' +
+          slSuffix(sum / total, s.sl, '；') + '）';
+      }
     }
     $('readout').textContent = readout;
   }
+
+  /** 纵轴上限：不小于 v 的 1 / 2 / 2.5 / 5 × 10^k，最多 100% */
+  function niceTop(v) {
+    if (!(v > 0) || v >= 0.5) return 1;
+    const e = Math.pow(10, Math.floor(Math.log10(v)));
+    return [1, 2, 2.5, 5, 10].map((m) => m * e).find((t) => t >= v * (1 - 1e-12));
+  }
+  const pctLabel = (p) => Number((p * 100).toPrecision(3)) + '%';
 
   /** 击破概率曲线：总伤害 >= X 的概率（HP 为 X 时的击破率）；SL > 0 时加画 SL 后的曲线。点按处现场精确计算 */
   function drawCurve(box) {
     const s = chartState;
     if (!s.points) s.points = K.curve(s.prep, s.hp, CURVE_SEGMENTS);
-    const { points, hp, kills, total, min, max, sl } = s;
-    const P = PAD_CURVE, { width, plotW, plotH } = chartSize(box, P);
+    const { points, hp, kills, min, max, sl } = s;
+    const total = s.total / s.aoe;                       // 有 AOE 目标时，高度 = 主目标击破率 × AOE 目标的击破率
+    // 纵轴上限 = 曲线最高点（主目标必定击破时的本回合击破率，含 SL），取整到 1 / 2 / 2.5 / 5 × 10^k；没有 AOE 目标时就是 100%
+    const top = niceTop(sl ? withSL(s.aoe, sl) : s.aoe);
+    const ticks = [top, top / 2, 0].map((p) => ({ p, label: pctLabel(p) }));
+    const P = Object.assign({}, PAD_CURVE, { left: Math.max(PAD_CURVE.left, 8 + 6.5 * Math.max(...ticks.map((k) => k.label.length))) });
+    const { width, plotW, plotH } = chartSize(box, P);
+    s.curveLeft = P.left;                                 // 点按时换算横坐标用
     const x0 = points[0].x, x1 = points[points.length - 1].x;      // 最低总伤害 ~ 最高总伤害 + 1
     const xOf = (v) => P.left + ((v - x0) / (x1 - x0)) * plotW;
-    const yOf = (p) => P.top + (1 - p) * plotH;
+    const yOf = (p) => P.top + (1 - p / top) * plotH;
 
     let svg = '<svg viewBox="0 0 ' + width + ' ' + HEIGHT + '" width="' + width + '" height="' + HEIGHT + '">';
-    [1, 0.5, 0].forEach((p) => {                          // 纵轴刻度：100% / 50% / 0%
+    ticks.forEach(({ p, label }) => {                    // 纵轴刻度：上限 / 一半 / 0%（通常是 100% / 50% / 0%）
       const y = num(yOf(p));
       svg += '<line class="grid" x1="' + P.left + '" x2="' + (width - P.right) + '" y1="' + y + '" y2="' + y + '"/>';
-      svg += '<text x="' + (P.left - 6) + '" y="' + y + '" dy="0.35em" text-anchor="end">' + p * 100 + '%</text>';
+      svg += '<text x="' + (P.left - 6) + '" y="' + y + '" dy="0.35em" text-anchor="end">' + label + '</text>';
     });
     const line = points.map((pt) => num(xOf(pt.x)) + ',' + num(yOf(pt.count / total))).join(' ');
     svg += '<polygon class="area" points="' + num(xOf(x0)) + ',' + num(yOf(0)) + ' ' + line + ' ' + num(xOf(x1)) + ',' + num(yOf(0)) + '"/>';
@@ -397,12 +488,13 @@
     }
     let readout = '点按或左右滑动图表，查看不同 HP 时的击破率';
     if (active !== null) {
-      const p = K.countAtLeast(s.prep, active) / total;
+      const p = s.aoe > 0 ? K.countAtLeast(s.prep, active) / total : 0;
       const x = num(xOf(active));
       svg += '<line class="cursor" x1="' + x + '" x2="' + x + '" y1="' + P.top + '" y2="' + num(yOf(0)) + '"/>';
       svg += '<circle class="cursor-dot" cx="' + x + '" cy="' + num(yOf(p)) + '" r="4"/>';
       if (sl) svg += '<circle class="cursor-dot" cx="' + x + '" cy="' + num(yOf(withSL(p, sl))) + '" r="4"/>';
-      readout = 'HP 为 ' + fmt(active) + ' 时，击破率 ' + formatShort(p) + slSuffix(p, sl, '，');
+      readout = (s.aoeCount ? '主目标 HP 为 ' + fmt(active) + ' 时，本回合击破率 ' : 'HP 为 ' + fmt(active) + ' 时，击破率 ') +
+        formatShort(p) + slSuffix(p, sl, '，');
     }
     svg += '</svg>';
     box.innerHTML = svg;
@@ -419,7 +511,8 @@
       next = i >= 0 && i < bins.length ? i : null;
     } else {
       const { points } = chartState;
-      const t = (event.clientX - rect.left - PAD_CURVE.left) / (rect.width - PAD_CURVE.left - PAD_CURVE.right);
+      const left = chartState.curveLeft || PAD_CURVE.left;
+      const t = (event.clientX - rect.left - left) / (rect.width - left - PAD_CURVE.right);
       const x0 = points[0].x, x1 = points[points.length - 1].x;
       next = t < -0.05 || t > 1.05 ? null : Math.round(x0 + Math.min(1, Math.max(0, t)) * (x1 - x0));
     }
@@ -445,18 +538,54 @@
     setTimeout(() => { pending = false; update(); }, 0);   // 连续输入时合并成一次计算
   }
 
-  inputs.forEach((el, i) => {
+  /** Enter：跳到下一格（最后一格时收起键盘） */
+  function enterNext(e) {
+    if (e.key !== 'Enter' || e.target.tagName !== 'INPUT') return;
+    e.preventDefault();
+    const list = orderedInputs(), next = list[list.indexOf(e.target) + 1];
+    if (next) next.focus(); else e.target.blur();
+  }
+
+  inputs.forEach((el) => {
     el.addEventListener('input', () => { active = null; saveInputs(); schedule(); });
     el.addEventListener('blur', () => prettify(el));
-    el.addEventListener('keydown', (e) => {
-      if (e.key !== 'Enter') return;
-      e.preventDefault();
-      if (inputs[i + 1]) inputs[i + 1].focus(); else el.blur();
-    });
+    el.addEventListener('keydown', enterNext);
+  });
+
+  const aoeList = $('aoeList');
+  aoeList.addEventListener('input', (e) => {
+    const el = e.target;
+    if (!el.dataset.key) return;
+    store.active().data.aoe[Number(el.dataset.row)][el.dataset.key] = el.value;
+    active = null;
+    store.changed();
+    schedule();
+  });
+  aoeList.addEventListener('focusout', (e) => { if (e.target.dataset.key) prettify(e.target); });
+  aoeList.addEventListener('keydown', enterNext);
+  aoeList.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-remove]');
+    if (!b) return;
+    store.active().data.aoe.splice(Number(b.dataset.remove), 1);
+    renderAoe(store.active().data.aoe);
+    active = null;
+    store.changed();
+    update();
+  });
+  $('aoeAdd').addEventListener('click', () => {
+    const list = store.active().data.aoe;
+    if (list.length >= MAX_AOE) return;
+    list.push({ dmg: '', hp: '' });
+    renderAoe(list);
+    store.changed();
+    update();
+    aoeList.querySelector('.aoe-row:last-child input').focus();
   });
 
   $('clear').addEventListener('click', () => {
     inputs.forEach((el) => { el.value = ''; });
+    store.active().data.aoe = [];
+    renderAoe([]);
     active = null;
     saveInputs();
     update();

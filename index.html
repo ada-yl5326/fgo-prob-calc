@@ -65,6 +65,11 @@
         <input id="hp" type="text" inputmode="decimal" enterkeyhint="next" autocomplete="off" placeholder="击破血量">
         <span class="field-hint" data-default="要算固伤时，填「击破血量 − 各卡固伤之和」">要算固伤时，填「击破血量 − 各卡固伤之和」</span>
       </label>
+      <div class="aoe" id="aoe">
+        <div id="aoeList"></div>
+        <button type="button" class="aoe-add" id="aoeAdd">＋ AOE 其他目标</button>
+        <div class="aoe-tip" id="aoeTip">群体攻击同时打到的其他敌人，每个目标单独抽随机数，全部击破才算</div>
+      </div>
       <label class="field field-sl" id="field5">
         <span class="field-name">SL 次数</span>
         <input id="sl" type="text" inputmode="numeric" enterkeyhint="done" autocomplete="off" placeholder="0">
@@ -103,6 +108,7 @@
       <ul>
         <li>每张卡的伤害 = 向下取整(均伤 × 随机数)，随机数从 0.900 ~ 1.099 共 200 个值中等概率抽取，每张卡独立；总伤害 ≥ HP 即为击破。统计了全部 200⁴ 种组合，是精确值，取整方式与 Excel 计算器相同。</li>
         <li>均伤可以带小数，不出的卡留空。固伤不乘随机数：要算固伤时，HP 填「击破血量 − 各卡固伤之和」。</li>
+        <li><b>AOE 其他目标</b>：群体攻击同时打到的其他敌人，每行填打到它的群体伤害和它的 HP，最多 5 个。每个目标单独抽随机数，全部击破才算：击破率 = 主目标 × 各 AOE 目标的击破率，SL 也按这个算。图表画的是主目标。</li>
         <li><b>SL 次数</b>：没击破时可以重来几次。只适用于重来后发到的牌不变、只重新抽伤害随机数的情况。SL n 次 = 一共 n + 1 次机会，击破率 = 1 − (1 − 单次击破率)^(n+1)。不用时留空。</li>
         <li><b>伤害组</b>：可以保存好几组输入（例如每个回合一组），在「综合击破概率」页放进各个回合。</li>
         <li><b>伤害分布</b>：柱子 = 总伤害落在这一段的概率；点按某处，显示总伤害 ≥ 该处的概率（即 HP 为该处时的击破率）。<b>击破概率曲线</b>：高度 = HP 为 X 时的击破率，紫色是 SL 后的击破率；点按或滑动可以查看任意 HP。</li>
@@ -139,6 +145,7 @@
       <div class="option-hint" id="dealHint"></div>
     </section>
 
+    <div id="dealAlts"></div>
     <div id="dealOwners"></div>
     <div class="actions actions-bare"><button type="button" id="dealClear">清空选择</button></div>
 
@@ -154,6 +161,7 @@
         <li><b>回合</b>：「第 1 回合」只看一个回合；「1–2 回合」「1–3 回合」是同一轮洗牌的几个回合一起算，前面发出的牌后面不会再发，各回合的条件同时满足才算。</li>
         <li><b>从者</b>：从者1 要选配卡；从者2、3 可以不指定，不指定时他们的牌只看张数。不同从者的牌互不替代。</li>
         <li><b>条件</b>（点「第 n 回合」下面的小按钮切换）：选了牌时，<b>包含</b> = 至少发到这些牌，<b>仅含</b> = 这名从者发到的牌恰好是这些；没选牌时，<b>不限</b> = 发不发都行，<b>不能有</b> = 这名从者一张牌都不能发到。</li>
+        <li><b>或者</b>：几种发牌都可以接受时（例如 BA、BQ、BB 都行），点「＋ 或者」加一种条件，最多 5 种，满足任意一种即可。不能把各条件的概率直接相加（同一手牌可能同时满足几种，会重复计算），这里用容斥原理精确计算，过程见「计算过程」。</li>
         <li><b>纹章</b>：开了纹章的牌只认这一张；同色几张都开纹章时按 ①②③ 区分，互不替代。</li>
         <li>换人、从者退场、洗牌技能会改变牌库，这里不算；退场后重新洗牌，请在「综合击破概率」页用新的发牌组表示。</li>
       </ul>
@@ -201,7 +209,7 @@
   </div>
 
   <footer>
-    <div>v0.4 · 计算全部在本机完成，不上传任何数据</div>
+    <div>v0.5 · 计算全部在本机完成，不上传任何数据</div>
     <div class="footer-links">
       <a href="https://github.com/ada-yl5326/fgo-prob-calc" target="_blank" rel="noopener">GitHub 仓库</a> ·
       <a href="https://space.bilibili.com/28108391" target="_blank" rel="noopener">作者 B站主页</a>
