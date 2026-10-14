@@ -136,7 +136,7 @@
     const ones = d.alts.map((a, k) => evaluateOne(view(d, k)));
     const bad = ones.findIndex((e) => e.status !== 'ok');
     if (bad >= 0) return { status: 'error', message: (ones.length > 1 ? '条件 ' + (bad + 1) + '：' : '') + ones[bad].message, span: T, servants: d.servants };
-    // alts / byMask / total：综合页「按条件分别指定伤害组」用（deal.js 的 regionCounts）
+    // alts / byMask / total：综合页「按条件分配伤害」用（deal.js 的 regionCounts）
     if (ones.length === 1) return Object.assign({}, ones[0], { alts: 1, byMask: [0, ones[0].r.favorable], total: ones[0].r.total });
     const union = D.computeAny(ones.map((e) => e.opts), MAX_TERMS);
     return { status: 'ok', r: ones[d.alt].r, union, probability: union.probability, span: T, servants: d.servants,
@@ -326,7 +326,7 @@
     if (T === 1) hints.push('第 1 回合从 ' + 5 * d.servants + ' 张里发 5 张');
     else hints.push('共享发牌：同一轮洗牌的前 ' + T + ' 个回合，前面发出的牌后面不会再发');
     if (T === d.servants) hints.push('第 ' + T + ' 回合发出的就是前面剩下的 5 张');
-    hints.push('「第 n 回合」下面的小按钮切换条件：选了牌时「包含 / 仅含」，没选牌时「不限 / 不能有」');
+    hints.push('「第 n 回合」下面的小按钮切换：选了牌时「包含 / 仅含」，没选牌时「不限 / 不能有」');
     $('dealHint').textContent = hints.join('。') + '。';
   }
 

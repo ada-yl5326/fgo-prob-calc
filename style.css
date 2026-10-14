@@ -596,7 +596,7 @@ button:disabled { opacity: 0.4; cursor: default; }
   line-height: 1.2;
   border-radius: 0 0 0 8px;
 }
-/* 击破栏按条件分别指定（发牌组有几种条件时） */
+/* 击破栏按条件分配伤害（发牌组有几种条件时） */
 .tl-cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .tl-cell > .tl-slot, .tl-cell > .tl-item { flex: 1; }
 .tl-split-btn { padding: 2px 8px; font-size: 11px; color: var(--accent); border-style: dashed; }

@@ -14,7 +14,7 @@
 
   // ---------- 方案 ----------
 
-  // split[t]：第 t 回合按条件分别指定伤害组 { alts: [伤害组 id | null] × 条件数, other: 伤害组 id | null }，不分条件时为 null
+  // split[t]：第 t 回合按条件分配伤害 { alts: [伤害组 id | null] × 条件数, other: 伤害组 id | null }，不分条件时为 null
   let plan = { turns: 3, kill: [null, null, null], deal: [], split: [null, null, null] };
   let notice = '';                                       // 一次性的提示（例如引用的组被删除了）
 
@@ -79,7 +79,7 @@
     const g = Deal.store.get(id), r = Deal.evaluate(g.data), ok = r.status === 'ok';
     return {
       name: g.name, rate: ok ? r.probability : null, span: r.span, servants: r.servants, alts: g.data.alts.length,
-      regions: ok ? (order) => DealCore.regionCounts(r.byMask, order, r.total) : null,     // 按条件分别指定伤害组时用
+      regions: ok ? (order) => DealCore.regionCounts(r.byMask, order, r.total) : null,     // 按条件分配伤害时用
     };
   }
 
@@ -123,7 +123,7 @@
 
   function factorLabel(f) {
     if (f.kind === 'deal') return rangeText(f.turn, f.to) + ' 发牌';
-    if (f.kind === 'mix') return rangeText(f.turn, f.to) + ' 发牌 + 击破（分条件）';
+    if (f.kind === 'mix') return rangeText(f.turn, f.to) + ' 按条件分配伤害';
     return 'T' + (f.turn + 1) + ' 击破';
   }
 
@@ -218,11 +218,11 @@
       '<button type="button" class="tl-remove" ' + remove + ' aria-label="移除">×</button></div>';
   }
 
-  /** 按条件分别指定的击破格：条件 1 … n 和「其他」，每格放一个伤害组 */
+  /** 按条件分配伤害的击破格：条件 1 … n 和「其他」，每格放一个伤害组 */
   function splitCell(r, t, style, target) {
     const sp = r.splits[t], p = r.placements[r.cover[t]];
     const texts = Deal.altTexts(Deal.store.get(p.id).data);
-    let html = '<div class="tl-split" style="' + style + '"><div class="tl-split-head"><span>按条件</span>' +
+    let html = '<div class="tl-split" style="' + style + '"><div class="tl-split-head"><span>按条件分配伤害</span>' +
       '<button type="button" class="tl-merge" data-merge="' + t + '">合并</button></div>';
     sp.alts.forEach((k, a) => {
       html += '<div class="tl-split-row"><div class="tl-split-label" title="' + esc(texts[a] || '') + '">条件 ' + (a + 1) +
@@ -243,9 +243,9 @@
       }
       const cell = 'grid-row:' + (t + 2) + ';grid-column:3';
       if (r.splits[t]) html += splitCell(r, t, cell, target);
-      else if (r.cover[t] >= 0) {                        // 被发牌组占用：可以按条件分别指定
+      else if (r.cover[t] >= 0) {                        // 被发牌组占用：可以按条件分配伤害
         html += '<div class="tl-cell" style="' + cell + '">' + killCell(r.kills[t], t, undefined, '', target) +
-          '<button type="button" class="tl-split-btn" data-split="' + t + '">按条件分别指定</button></div>';
+          '<button type="button" class="tl-split-btn" data-split="' + t + '">按条件分配伤害</button></div>';
       } else html += killCell(r.kills[t], t, undefined, cell, target);
     }
     r.placements.forEach((p, i) => {
@@ -328,7 +328,7 @@
       commit();
       return;
     }
-    if (b.dataset.split !== undefined) {                 // 按条件分别指定：每个条件格先放原来的伤害组
+    if (b.dataset.split !== undefined) {                 // 按条件分配伤害：每个条件格先放原来的伤害组
       const t = Number(b.dataset.split), r0 = C.evaluate(plan, killInfo, dealInfo), n = r0.placements[r0.cover[t]].alts;
       plan.split[t] = { alts: Array.from({ length: n }, () => plan.kill[t]), other: null };
       plan.kill[t] = null;
