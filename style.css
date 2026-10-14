@@ -24,8 +24,9 @@
   color-scheme: light;
 }
 
+/* 深色：系统是深色且没有手动选浅色，或者手动选了深色（右上角的外观按钮，main.js） */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #101216;
     --surface: #1a1d23;
     --text: #e9ebef;
@@ -46,6 +47,27 @@
     --gold-soft: #3a3116;
     color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #101216;
+  --surface: #1a1d23;
+  --text: #e9ebef;
+  --muted: #9198a5;
+  --border: #2d323b;
+  --accent: #6b9bff;
+  --accent-soft: #1f2b44;
+  --miss: #434a56;
+  --sum: #ffc94d;
+  --sl: #b48cff;
+  --danger: #ff6b81;
+  --focus: rgba(107, 155, 255, 0.28);
+  --on-accent: #0d1424;
+  --buster: #ff7a7f;
+  --arts: #79a8ff;
+  --quick: #5fd279;
+  --gold: #f2c14e;
+  --gold-soft: #3a3116;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -220,7 +242,7 @@ footer { text-align: center; font-size: 12px; color: var(--muted); margin-top: 8
 }
 
 /* 顶部：Laplace NS（Laplace Next Station）——地铁站牌式的「圆环 + 横条」标志 */
-.brand { display: flex; align-items: center; gap: 12px; margin: 2px 2px 12px; }
+.brand { position: relative; display: flex; align-items: center; justify-content: center; gap: 12px; margin: 2px 2px 12px; }
 .brand-logo { flex: none; margin: 0; line-height: 0; }
 .brand-logo svg { display: block; width: 78px; height: 72px; overflow: visible; }
 .logo-ring { fill: none; stroke: var(--accent); stroke-width: 6.75; }
@@ -238,6 +260,29 @@ footer { text-align: center; font-size: 12px; color: var(--muted); margin-top: 8
 .logo-n { fill: var(--gold); }
 .logo-s { fill: var(--buster); }
 .brand-text { min-width: 0; }
+.theme-btn {                                         /* 外观按钮固定在右上角，不影响标题居中 */
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px 5px 8px;
+  font-size: 13px;
+  white-space: nowrap;
+  background: var(--surface);
+}
+.theme-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.theme-btn svg .fill { fill: currentColor; stroke: none; }
+@media (max-width: 479px) {                          /* 手机：外观按钮只显示图标 */
+  .theme-label { display: none; }
+  .theme-btn { padding: 6px; }
+}
+@media (max-width: 360px) {                          /* 小屏手机：标志缩小一点，给右上角的按钮留位置 */
+  .brand { gap: 10px; }
+  .brand-logo svg { width: 64px; height: 59px; }
+  .brand-t1 { font-size: 14px; letter-spacing: 1.2px; }
+}
 .brand-t1 { font-size: 15px; font-weight: 800; letter-spacing: 2.2px; text-transform: uppercase; color: var(--text); white-space: nowrap; }
 .brand-t2 { margin-top: 3px; font-size: 13px; color: var(--muted); }
 

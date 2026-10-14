@@ -16,6 +16,10 @@
 <link rel="icon" type="image/png" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="stylesheet" href="style.css">
+<script>
+  // 外观（自动 / 浅色 / 深色）：在页面画出来之前就应用保存的选择，避免先闪一下另一种颜色。按钮的逻辑在 main.js
+  try { var th = localStorage.getItem('killprob.theme.v1'); if (th === 'light' || th === 'dark') document.documentElement.dataset.theme = th; } catch (e) { /* 忽略 */ }
+</script>
 </head>
 <body>
 <main class="app">
@@ -36,6 +40,7 @@
       <div class="brand-t1">Next Station</div>
       <div class="brand-t2">击破与发牌概率</div>
     </div>
+    <button type="button" class="theme-btn" id="themeBtn"></button>
   </header>
   <nav class="tabs" role="tablist" aria-label="功能">
     <button type="button" role="tab" data-tab="kill" aria-controls="viewKill">击破概率</button>
