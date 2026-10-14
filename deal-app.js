@@ -240,7 +240,7 @@
     if (T === 1) hints.push('第 1 回合从 ' + 5 * d.servants + ' 张里发 5 张');
     else hints.push('共享发牌：同一轮洗牌的前 ' + T + ' 个回合，前面发出的牌后面不会再发');
     if (T === d.servants) hints.push('第 ' + T + ' 回合发出的就是前面剩下的 5 张');
-    hints.push('每回合左边的小按钮切换：指定了牌时「包含 / 仅含」，没指定时「不限 / 一张都不能有」');
+    hints.push('「第 n 回合」下面的小按钮切换条件：选了牌时「包含 / 仅含」，没选牌时「不限 / 不能有」');
     $('dealHint').textContent = hints.join('。') + '。';
   }
 
