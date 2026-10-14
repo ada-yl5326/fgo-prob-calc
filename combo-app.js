@@ -42,6 +42,7 @@
 
   function save() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(plan)); } catch (e) { /* 无痕模式等 */ }
+    document.dispatchEvent(new CustomEvent('combochange'));   // 工作目录据此判断有没有未保存的修改
   }
 
   /** 方案改动后：保存、重画；message = 改动附带的提示（没有时清掉上一次的提示） */
@@ -77,10 +78,13 @@
 
   function dealInfo(id) {
     const g = Deal.store.get(id), r = Deal.evaluate(g.data), ok = r.status === 'ok';
-    return {
+    const info = {
       name: g.name, rate: ok ? r.probability : null, span: r.span, servants: r.servants, alts: g.data.alts.length,
-      regions: ok ? (order) => DealCore.regionCounts(r.byMask, order, r.total) : null,     // 按条件分配伤害时用
     };
+    if (ok) {                                            // 按条件分配伤害时用
+      info.exact = DealCore.exactCounts(r.byMask, r.alts, r.total);
+    }
+    return info;
   }
 
   const spanOf = (id) => dealInfo(id).span;
@@ -115,7 +119,11 @@
     return msgs.join('；');
   }
 
-  window.ComboApp = { usage };
+  // 工作目录用：当前方案的副本、当前方案的综合击破率（没有结果时为 null）
+  const snapshot = () => JSON.parse(JSON.stringify(plan));
+  const value = () => { try { prune(); return C.evaluate(plan, killInfo, dealInfo).value; } catch (e) { return null; } };
+
+  window.ComboApp = { usage, snapshot, value };
 
   // ---------- 显示 ----------
 
@@ -127,13 +135,16 @@
     return 'T' + (f.turn + 1) + ' 击破';
   }
 
-  /** 分条件的一轮：按击破率从高到低划分的各块 */
+  /** 按条件分配伤害的一轮：按「恰好满足哪几种条件」分组 */
   function mixDetail(f) {
     if (f.rate === null) return '';
-    let first = true;
     const rows = f.regions.filter((x) => x.count).map((x) => {
-      const label = x.alt === 'other' ? '一种条件都不满足（其他）' : '满足条件 ' + (x.alt + 1) + (first ? '' : '（不含上面的）');
-      if (x.alt !== 'other') first = false;
+      let label;
+      if (x.other) label = '一种条件都不满足（其他）';
+      else {
+        const names = x.set.map((k) => k + 1).join('、');
+        label = x.set.length === 1 ? '只满足条件 ' + names : '同时满足条件 ' + names + '（各打一次，SL 换打法）';
+      }
       return '<div>' + label + '：' + fmt(x.count) + ' 种 × ' + short(x.value) + '</div>';
     });
     const multi = f.to > f.turn && f.regions.length > 2;

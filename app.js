@@ -282,6 +282,8 @@
     });
     setHint(4, hp.error, !!hp.error);
     setHint(5, sl.error, !!sl.error);
+    document.querySelector('.sl-step[data-step="-1"]').disabled = !sl.error && sl.value <= 0;
+    document.querySelector('.sl-step[data-step="1"]').disabled = !sl.error && sl.value >= MAX_SL;
     aoeHints(r.parsed);
     if (r.status !== 'ok') return showIdle(r.message, r.prep);
 
@@ -580,6 +582,18 @@
     store.changed();
     update();
     aoeList.querySelector('.aoe-row:last-child input').focus();
+  });
+
+  // SL 次数旁边的 − / ＋：每次减 / 加 1（0 ~ 999，减到 0 时留空）；输入有误时从 0 开始
+  document.querySelectorAll('.sl-step').forEach((b) => {
+    b.addEventListener('click', () => {
+      const cur = parseSL(slInput.value), base = cur.error ? 0 : cur.value;
+      const next = Math.min(MAX_SL, Math.max(0, base + Number(b.dataset.step)));
+      slInput.value = next ? String(next) : '';
+      active = null;
+      saveInputs();
+      schedule();
+    });
   });
 
   $('clear').addEventListener('click', () => {

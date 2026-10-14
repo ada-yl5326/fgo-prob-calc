@@ -136,7 +136,7 @@
     const ones = d.alts.map((a, k) => evaluateOne(view(d, k)));
     const bad = ones.findIndex((e) => e.status !== 'ok');
     if (bad >= 0) return { status: 'error', message: (ones.length > 1 ? '条件 ' + (bad + 1) + '：' : '') + ones[bad].message, span: T, servants: d.servants };
-    // alts / byMask / total：综合页「按条件分配伤害」用（deal.js 的 regionCounts）
+    // alts / byMask / total：综合页「按条件分配伤害」用（deal.js 的 exactCounts）
     if (ones.length === 1) return Object.assign({}, ones[0], { alts: 1, byMask: [0, ones[0].r.favorable], total: ones[0].r.total });
     const union = D.computeAny(ones.map((e) => e.opts), MAX_TERMS);
     return { status: 'ok', r: ones[d.alt].r, union, probability: union.probability, span: T, servants: d.servants,

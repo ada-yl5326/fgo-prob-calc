@@ -15,10 +15,13 @@
  *
  * 按条件分配伤害（发牌组有「或者」的几种条件时，不同的牌型打出的伤害不同）：
  *     被发牌组占用的回合，击破格可以分成「条件 1 … 条件 n / 其他」，每格放一个伤害组。
- *     这一轮洗牌里只要有回合分了条件，就不能再把击破率和发牌概率分开相乘，改为：
- *         每种条件的价值 v_k = 这一轮各回合在条件 k 下的击破率之积（分了条件的回合用条件 k 那格，其余回合用原来的伤害组）；
- *         一手牌满足好几种条件时按 v 最高的那种打，所以按 v 从高到低划分发牌结果（deal.js 的 regionCounts）：
- *         这一轮的成功率 = Σ 第 i 块的组合数 × v_第 i 块 / 全部组合数 + 「其他」（一种条件都不满足）的组合数 × v_其他 / 全部组合数
+ *     这一轮洗牌里只要有回合分了条件，就不能再把击破率和发牌概率分开相乘，改为按「恰好满足哪几种条件」分组
+ *     （deal.js 的 exactCounts）：
+ *         这一轮的成功率 = Σ 每组的组合数 × 这组的击破率 / 全部组合数，一种都不满足的那组用「其他」格
+ *     这组的击破率：一手牌满足的每种条件各代表一种打法（例如出牌顺序不同），按 SL 换打法——每种打法各打一次，任意一次击破即可
+ *     （FGO 里 SL 后照原样出牌结果不变，换了打法随机数才重新抽，各打法互相独立）：
+ *         分了条件的回合 = 1 − Π (1 − 满足的各条件格的击破率)（同一个伤害组只算一次；有空格 = 不需要击破）；
+ *         没分条件的回合用原来的伤害组。
  *     「其他」那格没放伤害组 = 没满足条件就失败（v_其他 = 0）；条件格没放伤害组 = 这一回合不需要击破（100%）。
  *     几种条件只在同一个回合有差别时这样算是精确的；在不同回合都有差别时，相当于「看到后面的牌再决定按哪种打」，结果略偏高。
  */
@@ -32,7 +35,7 @@
    *          split: [null | { alts: [伤害组 id | null] × 条件数, other: 伤害组 id | null }] × turns（可省略） }
    * kill(id) → { name, rate: SL 后的击破率 | null（没输入完整） }
    * deal(id) → { name, rate: 发牌概率 | null（条件有误）, span: 占几个回合, servants: 场上人数,
-   *              alts: 条件数, regions(order) → { counts, other, total }（按优先顺序划分发牌结果，见 deal.js 的 regionCounts） }
+   *              alts: 条件数, exact: 恰好满足各条件集合的组合数（deal.js 的 exactCounts） }
    * 返回 {
    *   turns, value: 综合击破率 | null, problems: [说明],
    *   placements: [{ at, end, id, name, rate, span, servants, shown: 实际显示占几格, reshuffle: 'first' | 'natural' | 'forced', conflict: null | 文字 }],
@@ -40,7 +43,8 @@
    *   kills: 每回合 { id, name, rate } | null,
    *   splits: 每回合实际生效的分条件 { alts: [{ id, name, rate } | null], other: { id, name, rate } | null } | null（不在发牌组里的回合不生效）,
    *   blocks: 公式按洗牌分组 [{ from, to, placement: 序号 | -1, factors: [{ kind, turn, name, rate }] }]；
-   *           分了条件的一轮只有一个 kind = 'mix' 的因子，带 to、regions: [{ alt: 条件序号 | 'other', count, value }]、total,
+   *           分了条件的一轮只有一个 kind = 'mix' 的因子，带 to、total、
+   *           regions: [{ set: 恰好满足的条件, count, value } | { other: true, count, value }],
    *   factors: 全部不是 100% 的因子（按回合顺序），weakest: 最小的那个
    * }
    */
@@ -58,7 +62,7 @@
     var placements = plan.deal.map(function (p) {
       var d = deal(p.id);
       return { at: p.at, id: p.id, name: d.name, rate: d.rate, span: d.span, servants: d.servants, end: p.at + d.span - 1, conflict: null,
-        alts: d.alts || 1, regions: d.regions || null };
+        alts: d.alts || 1, exact: d.exact || null };
     }).sort(function (a, b) { return a.at - b.at; });
 
     var cycleStart = 0, cycleLen = placements.length ? placements[0].servants : 3;
@@ -122,28 +126,44 @@
       blocks: blocks, factors: factors, weakest: weakest };
   }
 
-  /** 分了条件的一轮洗牌（第 from ~ to 回合，发牌组 p）：按击破率从高到低划分发牌结果后加权求和 */
+  /** 分了条件的一轮洗牌（第 from ~ to 回合，发牌组 p）：按「恰好满足哪几种条件」分组后加权求和 */
   function mixFactor(p, from, to, kills, splits) {
-    var n = p.alts || 1, values = [], other = 1, ok = p.rate !== null && !!p.regions;
+    var ok = p.rate !== null && !!p.exact, t;
     var rateOf = function (x) { if (x && x.rate === null) ok = false; return x ? x.rate : 1; };
-    for (var k = 0; k < n; k++) {
-      var val = 1;
-      for (var t = from; t <= to; t++) val *= splits[t] ? rateOf(splits[t].alts[k]) : rateOf(kills[t]);
-      values.push(val);
-    }
-    for (t = from; t <= to; t++) other *= splits[t] ? (splits[t].other ? rateOf(splits[t].other) : 0) : rateOf(kills[t]);
     var f = { kind: 'mix', turn: from, to: to, name: p.name, rate: null, regions: [], total: null };
     if (!ok) return f;
-    var order = values.map(function (val, i) { return i; }).sort(function (a, b) { return values[b] - values[a] || a - b; });
-    var reg = p.regions(order), sum = 0;
-    order.forEach(function (k, i) {
-      f.regions.push({ alt: k, count: reg.counts[i], value: values[k] });
-      sum += reg.counts[i] * values[k];
-    });
-    f.regions.push({ alt: 'other', count: reg.other, value: other });
-    sum += reg.other * other;
-    f.total = reg.total;
-    f.rate = sum / reg.total;
+    /** 满足 set 里这几种条件时的击破率：分了条件的回合，各条件格的伤害组各打一次（SL 换打法） */
+    var valueOf = function (set) {
+      var v = 1;
+      for (t = from; t <= to; t++) {
+        if (!splits[t]) { v *= rateOf(kills[t]); continue; }
+        var miss = 1, seen = {};
+        set.forEach(function (k) {
+          var g = splits[t].alts[k];
+          if (!g) miss = 0;                                  // 空格 = 这一回合不需要击破
+          else if (!seen[g.id]) { seen[g.id] = true; miss *= 1 - rateOf(g); }
+        });
+        v *= 1 - miss;
+      }
+      return v;
+    };
+    var other = 1;
+    for (t = from; t <= to; t++) other *= splits[t] ? (splits[t].other ? rateOf(splits[t].other) : 0) : rateOf(kills[t]);
+    var sum = 0, total = p.exact[0];
+    for (var m = 1; m < p.exact.length; m++) {
+      var c = p.exact[m], set = [];
+      total += c;
+      if (!c) continue;
+      for (var k = 0; (1 << k) <= m; k++) if ((m >> k) & 1) set.push(k);
+      var value = valueOf(set);
+      f.regions.push({ set: set, count: c, value: value });
+      sum += c * value;
+    }
+    if (!ok) { f.regions = []; return f; }
+    f.regions.push({ other: true, count: p.exact[0], value: other });
+    sum += p.exact[0] * other;
+    f.total = total;
+    f.rate = sum / total;
     return f;
   }
 

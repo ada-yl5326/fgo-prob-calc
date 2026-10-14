@@ -274,9 +274,93 @@ footer { text-align: center; font-size: 12px; color: var(--muted); margin-top: 8
 }
 .theme-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .theme-btn svg .fill { fill: currentColor; stroke: none; }
-@media (max-width: 479px) {                          /* 手机：外观按钮只显示图标 */
-  .theme-label { display: none; }
-  .theme-btn { padding: 6px; }
+
+/* 左上角：工作目录按钮（和右上角的外观按钮对称） */
+.ws-btn {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px 5px 8px;
+  font-size: 13px;
+  white-space: nowrap;
+  background: var(--surface);
+}
+.ws-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; }
+.ws-dot { position: absolute; top: -2px; right: -2px; width: 9px; height: 9px; border-radius: 50%; background: var(--gold); border: 2px solid var(--bg); }
+
+/* 工作目录侧边栏 */
+.ws-backdrop { position: fixed; inset: 0; z-index: 40; background: rgba(0, 0, 0, 0.35); opacity: 0; transition: opacity 0.2s; }
+.ws-backdrop.open { opacity: 1; }
+.ws-panel {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 41;
+  width: min(340px, 88vw);
+  overflow-y: auto;
+  padding: calc(12px + env(safe-area-inset-top)) 14px calc(16px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.2);
+  transform: translateX(-100%);
+  transition: transform 0.22s ease;
+}
+.ws-panel.open { transform: none; }
+.ws-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-size: 17px; }
+.ws-close { border: 0; font-size: 22px; line-height: 1; padding: 4px 8px; }
+.ws-msg { margin-bottom: 10px; padding: 8px 10px; border-radius: 10px; background: var(--accent-soft); color: var(--text); font-size: 13px; }
+.ws-current { padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.ws-cur-label { font-size: 12px; color: var(--muted); }
+.ws-cur-name { font-size: 16px; font-weight: 700; color: var(--text); overflow-wrap: anywhere; }
+.ws-cur-state { margin-top: 2px; font-size: 12px; color: var(--muted); }
+.ws-cur-state.dirty { color: var(--gold); font-weight: 600; }
+.ws-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.ws-actions .primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+.ws-actions .primary:disabled { opacity: 0.45; cursor: default; }
+.ws-main button { flex: 1; color: var(--accent); border-style: dashed; }
+.ws-list-title { margin: 16px 2px 6px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.ws-empty { font-size: 13px; color: var(--muted); padding: 6px 2px; }
+.ws-list { list-style: none; margin: 0; padding: 0; }
+.ws-item { display: flex; flex-wrap: wrap; align-items: stretch; margin-bottom: 6px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); overflow: hidden; }
+.ws-item.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.ws-open { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; border: 0; border-radius: 0; text-align: left; }
+.ws-name { font-size: 14px; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.ws-name em { margin-left: 6px; font-style: normal; font-size: 11px; color: var(--accent); }
+.ws-open small { font-size: 11px; color: var(--muted); }
+.ws-more { border: 0; border-radius: 0; padding: 0 12px; font-size: 18px; }
+.ws-item-actions { flex-basis: 100%; display: flex; gap: 6px; padding: 0 10px 8px; }
+.ws-item-actions button { padding: 3px 10px; font-size: 12px; }
+.ws-item-actions .danger { color: var(--danger); }
+.ws-tip { margin: 14px 2px 0; font-size: 12px; line-height: 1.6; color: var(--muted); }
+
+/* 对话框里的输入框、多行文字、选择文件、勾选框 */
+.modal-input, .modal-area {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  font: inherit;
+  font-size: 16px;
+  padding: 8px 10px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.modal-area { font-size: 13px; font-family: ui-monospace, Menlo, Consolas, monospace; word-break: break-all; resize: vertical; }
+.modal-files { display: flex; flex-wrap: wrap; gap: 8px; }
+.modal-status { margin-top: 8px; min-height: 1.4em; font-size: 13px; color: var(--muted); }
+.modal-status.bad { color: var(--danger); }
+.modal-file { display: inline-block; margin-top: 10px; padding: 5px 14px; border: 1px dashed var(--accent); border-radius: 999px; color: var(--accent); font-size: 14px; cursor: pointer; }
+.modal-img { display: block; width: min(260px, 100%); margin: 12px auto 0; border-radius: 8px; image-rendering: pixelated; }
+.modal-check { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 14px; color: var(--text); }
+.modal-actions { flex-wrap: wrap; }
+@media (max-width: 479px) {                          /* 手机：外观、工作目录按钮只显示图标 */
+  .theme-label, .ws-label { display: none; }
+  .theme-btn, .ws-btn { padding: 6px; }
 }
 @media (max-width: 360px) {                          /* 小屏手机：标志缩小一点，给右上角的按钮留位置 */
   .brand { gap: 10px; }
@@ -462,7 +546,7 @@ button:disabled { opacity: 0.4; cursor: default; }
 .modal {
   position: fixed;
   inset: 0;
-  z-index: 20;
+  z-index: 60;                           /* 在工作目录侧边栏（41）上面 */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -487,6 +571,9 @@ button:disabled { opacity: 0.4; cursor: default; }
 /* 击破概率：SL 次数、SL 表 */
 .field-sl { margin-top: 2px; }
 .field-sl input { width: 7em; }
+.sl-row { display: flex; align-items: center; gap: 6px; }
+.sl-step { width: 44px; height: 44px; padding: 0; font-size: 20px; line-height: 1; color: var(--text); background: var(--surface); }
+.sl-step:disabled { color: var(--muted); opacity: 0.5; cursor: default; }
 .sl-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
 .sl-table th, .sl-table td { text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .sl-table th { font-weight: 600; color: var(--muted); }

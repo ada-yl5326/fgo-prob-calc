@@ -299,7 +299,7 @@
    * 「同时满足」的条件由 intersect() 得到，仍是普通的条件，用 compute() 精确计算；组合数都是整数，没有误差。
    * 返回 { favorable, total, probability, alternatives: 每种条件各自的 compute() 结果,
    *        parts: [{ set: 条件序号, sign: +1 / −1, favorable, opts: 同时满足时的条件（不可能时为 null） }],
-   *        byMask: byMask[m] = 条件集合 m（二进制，第 i 位 = 条件 i）同时满足的组合数，regionCounts() 用 }
+   *        byMask: byMask[m] = 条件集合 m（二进制，第 i 位 = 条件 i）同时满足的组合数，exactCounts() 用 }
    */
   function computeAny(list, maxTerms) {
     var alternatives = list.map(function (q) {
@@ -330,29 +330,27 @@
   }
 
   /**
-   * 几种条件按优先顺序划分发牌结果（综合页「按条件分配伤害」用）：
-   * 一手牌满足好几种条件时，算作 order 里排在最前面的那种（综合页按击破率从高到低排，即玩家会选打得最好的那种）。
-   *     第 i 块 = 满足条件 order[i]、但不满足排在它前面的任何条件
-   *             = Σ_{S ⊆ 前面的条件} (−1)^|S| × 「条件 order[i] 和 S 同时满足」的组合数（容斥原理）
-   * byMask 来自 computeAny()（只有一种条件时为 [0, 组合数]）；total = 全部组合数。
-   * 返回 { counts: 第 i 块的组合数（与 order 对应）, other: 一种条件都不满足的组合数, total }
+   * 「恰好满足哪几种条件」的发牌组合数（综合页「按条件分配伤害」用）：
+   *     恰好满足集合 m = Σ_{T ⊇ m} (−1)^(|T|−|m|) ×「T 里的条件同时满足」的组合数（容斥原理）
+   * byMask 来自 computeAny()（只有一种条件时为 [0, 组合数]）；n = 条件数；total = 全部组合数。
+   * 返回长度 2^n 的数组 exact：exact[m] = 恰好满足集合 m（二进制，第 i 位 = 条件 i）的组合数；exact[0] = 一种都不满足
    */
-  function regionCounts(byMask, order, total) {
-    var counts = [], before = 0;
-    order.forEach(function (k) {
-      var c = 0;
-      for (var sub = before; ; sub = (sub - 1) & before) {          // 枚举「前面的条件」的所有子集
+  function exactCounts(byMask, n, total) {
+    var full = (1 << n) - 1, out = [];
+    for (var m = 0; m <= full; m++) {
+      var rest = full & ~m, c = 0;
+      for (var sup = rest; ; sup = (sup - 1) & rest) {            // 所有包含 m 的集合 T = m | sup
         var bits = 0;
-        for (var x = sub; x; x &= x - 1) bits++;
-        c += (bits % 2 ? -1 : 1) * byMask[sub | (1 << k)];
-        if (!sub) break;
+        for (var x = sup; x; x &= x - 1) bits++;
+        var all = m | sup;
+        c += (bits % 2 ? -1 : 1) * (all ? byMask[all] : total);
+        if (!sup) break;
       }
-      counts.push(c);
-      before |= 1 << k;
-    });
-    var covered = counts.reduce(function (s, c) { return s + c; }, 0);
-    return { counts: counts, other: total - covered, total: total };
+      out.push(c);
+    }
+    return out;
   }
+
 
   /**
    * 旧的调用方式（只指定打手一名从者，整组统一包含 / 仅含），保留给测试和以前的代码：
@@ -375,7 +373,7 @@
   var api = {
     COLORS: COLORS, DECKS: DECKS, HAND: HAND,
     comb: comb, gcd: gcd, deckCards: deckCards, cardTypes: cardTypes, compute: compute, dealProbability: dealProbability,
-    intersect: intersect, computeAny: computeAny, regionCounts: regionCounts,
+    intersect: intersect, computeAny: computeAny, exactCounts: exactCounts,
   };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.Deal = api;

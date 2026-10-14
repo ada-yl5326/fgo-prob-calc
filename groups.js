@@ -113,36 +113,107 @@
   // ---------- 确认框（页面内）----------
   // 不用浏览器自带的 confirm()：有些环境（App 内置浏览器、部分网页视图）不弹出它、直接当成「取消」，按钮就像没反应
 
-  /** 显示确认框，返回 Promise<boolean>。opts: { ok: 确认按钮文字, danger: 确认按钮标红 } */
-  function confirmBox(message, opts) {
-    opts = opts || {};
+  /**
+   * 页面内的对话框，返回 Promise<{ value: 按下的按钮的 value（取消 / 点框外 / Esc 为 null）, text, checked }>。
+   * opts: {
+   *   message,
+   *   buttons: [{ label, value, kind: 'primary' | 'danger' | '' }]（最后一个按钮默认获得焦点）,
+   *   input: { value, placeholder, maxlength } —— 单行输入框；按 Enter = 按最后一个按钮
+   *   textarea: { value, placeholder, readonly } —— 多行文字（例如分享码）
+   *   files: [{ accept, label, read(file) → Promise<文字>, submit }] —— 选择文件的按钮（可以有几个）：
+   *          读出的文字填进多行文字框；submit = 读成功后自动按下这个 value 的按钮；读失败时在框里显示原因
+   *   check: { label, checked } —— 一个勾选框
+   *   image: { src, alt } —— 一张图片（例如二维码；手机上长按可以保存）
+   * }
+   */
+  function dialogBox(opts) {
     return new Promise((resolve) => {
       const last = document.activeElement;
       const wrap = document.createElement('div');
       wrap.className = 'modal';
+      const buttons = opts.buttons || [{ label: '确定', value: 'ok', kind: 'primary' }];
       wrap.innerHTML = '<div class="modal-box" role="alertdialog" aria-modal="true" aria-labelledby="modalText">' +
-        '<div class="modal-text" id="modalText"></div><div class="modal-actions">' +
-        '<button type="button" data-answer="no">取消</button>' +
-        '<button type="button" data-answer="yes" class="' + (opts.danger ? 'danger' : 'primary') + '">' + escapeHtml(opts.ok || '确定') + '</button></div></div>';
-      wrap.querySelector('.modal-text').textContent = message;
-      function close(answer) {
+        '<div class="modal-text" id="modalText"></div>' +
+        (opts.input ? '<input class="modal-input" type="text" autocomplete="off" enterkeyhint="done">' : '') +
+        (opts.textarea ? '<textarea class="modal-area" rows="5" spellcheck="false"></textarea>' : '') +
+        (opts.files ? '<div class="modal-files">' + opts.files.map((f, i) =>
+          '<label class="modal-file"><input type="file" hidden data-file="' + i + '"><span>' + escapeHtml(f.label) + '</span></label>').join('') +
+          '</div><div class="modal-status" aria-live="polite"></div>' : '') +
+        (opts.check ? '<label class="modal-check"><input type="checkbox"><span></span></label>' : '') +
+        (opts.image ? '<img class="modal-img" alt="">' : '') +
+        '<div class="modal-actions">' + buttons.map((b, i) =>
+          '<button type="button" data-index="' + i + '" class="' + (b.kind || '') + '">' + escapeHtml(b.label) + '</button>').join('') + '</div></div>';
+      wrap.querySelector('.modal-text').textContent = opts.message || '';
+      const input = wrap.querySelector('.modal-input'), area = wrap.querySelector('.modal-area');
+      const check = wrap.querySelector('.modal-check input');
+      if (input) {
+        input.value = opts.input.value || '';
+        input.placeholder = opts.input.placeholder || '';
+        if (opts.input.maxlength) input.maxLength = opts.input.maxlength;
+      }
+      if (area) {
+        area.value = opts.textarea.value || '';
+        area.placeholder = opts.textarea.placeholder || '';
+        area.readOnly = !!opts.textarea.readonly;
+      }
+      if (check) {
+        check.checked = !!opts.check.checked;
+        wrap.querySelector('.modal-check span').textContent = opts.check.label;
+      }
+      if (opts.image) {
+        const img = wrap.querySelector('.modal-img');
+        img.src = opts.image.src;
+        img.alt = opts.image.alt || '';
+      }
+      wrap.querySelectorAll('[data-file]').forEach((fileInput) => {
+        const spec = opts.files[Number(fileInput.dataset.file)], status = wrap.querySelector('.modal-status');
+        if (spec.accept) fileInput.accept = spec.accept;
+        fileInput.addEventListener('change', () => {
+          const f = fileInput.files && fileInput.files[0];
+          if (!f) return;
+          status.textContent = '正在读取「' + f.name + '」…';
+          status.classList.remove('bad');
+          Promise.resolve().then(() => spec.read(f)).then((text) => {
+            if (area) area.value = text;
+            status.textContent = '已读取「' + f.name + '」';
+            if (spec.submit !== undefined) close(spec.submit);
+          }, (e) => {
+            status.textContent = (e && e.message) || '读取失败';
+            status.classList.add('bad');
+          });
+          fileInput.value = '';                          // 同一个文件可以再选一次
+        });
+      });
+      function close(value) {
         document.removeEventListener('keydown', onKey, true);
         wrap.remove();
         if (last && last.focus) last.focus();
-        resolve(answer);
+        resolve({ value, text: input ? input.value : area ? area.value : '', checked: check ? check.checked : false });
       }
       function onKey(e) {
-        if (e.key === 'Escape') { e.preventDefault(); close(false); }
+        if (e.key === 'Escape') { e.preventDefault(); close(null); }
+        else if (e.key === 'Enter' && e.target === input) { e.preventDefault(); close(buttons[buttons.length - 1].value); }
       }
       wrap.addEventListener('click', (e) => {
-        const b = e.target.closest('[data-answer]');
-        if (b) close(b.dataset.answer === 'yes');
-        else if (e.target === wrap) close(false);                 // 点框外 = 取消
+        const b = e.target.closest('[data-index]');
+        if (b) close(buttons[Number(b.dataset.index)].value);
+        else if (e.target === wrap) close(null);                  // 点框外 = 取消
       });
       document.addEventListener('keydown', onKey, true);
       document.body.appendChild(wrap);
-      wrap.querySelector('[data-answer="yes"]').focus();
+      if (input) { input.focus(); input.select(); }
+      else if (area && opts.textarea.readonly) { area.focus(); area.select(); }
+      else wrap.querySelector('.modal-actions button:last-child').focus();
     });
+  }
+
+  /** 显示确认框，返回 Promise<boolean>。opts: { ok: 确认按钮文字, danger: 确认按钮标红 } */
+  function confirmBox(message, opts) {
+    opts = opts || {};
+    return dialogBox({
+      message,
+      buttons: [{ label: '取消', value: null }, { label: opts.ok || '确定', value: 'yes', kind: opts.danger ? 'danger' : 'primary' }],
+    }).then((r) => r.value === 'yes');
   }
 
   // ---------- 组的切换条：[组1] [组2] [＋]，下面是名称、复制、删除、清空所有组 ----------
@@ -226,5 +297,5 @@
     }
   };
 
-  window.Groups = { GroupStore, GroupBar, escapeHtml, confirmBox };
+  window.Groups = { GroupStore, GroupBar, escapeHtml, confirmBox, dialogBox };
 })();
