@@ -1,7 +1,7 @@
 {
-  "name": "击破与发牌概率",
-  "short_name": "概率计算",
-  "description": "精确计算一回合的击破概率，以及打手在前几回合发到指定牌的概率",
+  "name": "Laplace NS · 击破与发牌概率",
+  "short_name": "Laplace NS",
+  "description": "Laplace Next Station：精确计算一回合的击破概率（含 AOE、SL）、前几回合发到指定牌的概率，以及多回合方案的综合击破率",
   "lang": "zh-CN",
   "start_url": "./",
   "scope": "./",

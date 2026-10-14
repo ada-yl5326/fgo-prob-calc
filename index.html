@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>击破与发牌概率</title>
+<title>Laplace NS · 击破与发牌概率</title>
 <meta name="description" content="精确计算一回合的击破概率（含 SL）、前几回合发到指定牌的概率，以及多回合方案的综合击破率">
 <meta name="theme-color" content="#f3f4f6" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#101216" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="概率计算">
+<meta name="apple-mobile-web-app-title" content="Laplace NS">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="format-detection" content="telephone=no">
 <link rel="manifest" href="manifest.webmanifest">
@@ -20,6 +20,23 @@
 <body>
 <main class="app">
   <button type="button" class="update-bar" id="updateBar" hidden>新版本已下载，点此刷新</button>
+  <!-- 项目名 Laplace NS = Laplace Next Station。标志借用地铁站牌「圆环 + 横条」的造型（配色用本页的颜色，不照搬伦敦地铁的红蓝）：
+       横条里是 Laplace，N、S 压在圆环的最上端和最下端，圆环从字母后面穿过 -->
+  <header class="brand">
+    <h1 class="brand-logo">
+      <svg viewBox="0 0 78 72" role="img" aria-label="Laplace NS">
+        <circle class="logo-ring" cx="39" cy="36" r="23.6"/>
+        <rect class="logo-bar" x="1" y="29.6" width="76" height="12.8" rx="1.3"/>
+        <text class="logo-name" x="39" y="36.7">Laplace</text>
+        <text class="logo-n" x="39" y="13.2">N</text>
+        <text class="logo-s" x="39" y="60.4">S</text>
+      </svg>
+    </h1>
+    <div class="brand-text">
+      <div class="brand-t1">Next Station</div>
+      <div class="brand-t2">击破与发牌概率</div>
+    </div>
+  </header>
   <nav class="tabs" role="tablist" aria-label="功能">
     <button type="button" role="tab" data-tab="kill" aria-controls="viewKill">击破概率</button>
     <button type="button" role="tab" data-tab="deal" aria-controls="viewDeal">发牌概率</button>
