@@ -193,6 +193,9 @@ button:active { background: var(--bg); }
 .about li + li { margin-top: 4px; }
 
 footer { text-align: center; font-size: 12px; color: var(--muted); margin-top: 8px; }
+.footer-links { margin-top: 4px; }
+.footer-links a { color: var(--accent); text-decoration: none; }
+.footer-links a:hover { text-decoration: underline; }
 
 .update-bar {
   display: block;

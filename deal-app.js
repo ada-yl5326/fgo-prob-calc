@@ -129,17 +129,14 @@
     return lines.join('<br>');
   }
 
-  function oneIn(x) {
-    return x < 10 ? x.toFixed(2) : x < 100 ? x.toFixed(1) : fmt(Math.round(x));
-  }
-
   function fractionText(r) {
     if (r.favorable === 0) return '不可能出现';
     if (r.favorable === r.total) return '必定出现';
     const g = D.gcd(r.favorable, r.total);
     let s = fmt(r.favorable) + ' / ' + fmt(r.total);
     if (g > 1) s += ' = ' + fmt(r.favorable / g) + ' / ' + fmt(r.total / g);
-    return s + ' · 约每 ' + oneIn(r.total / r.favorable) + ' 次出现 1 次';
+    return '<div>' + s + '</div><div>' +
+      window.KillApp.frequencyText(r.favorable / r.total, (r.total - r.favorable) / r.total, '出现', '不出现') + '</div>';
   }
 
   function formatProbability(r) {
@@ -318,7 +315,7 @@
     $('dealProb').classList.remove('idle');
     $('dealMeter').style.width = r.probability * 100 + '%';
     $('dealDesc').innerHTML = describe(d);
-    $('dealFraction').textContent = fractionText(r);
+    $('dealFraction').innerHTML = fractionText(r);
     $('dealStepsBody').innerHTML = stepsHtml(d, r);
   }
 

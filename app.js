@@ -83,14 +83,18 @@
   function evaluate(data) {
     const cards = data.cards.map(parse), hp = parse(data.hp), sl = parseSL(data.sl);
     const parsed = { cards, hp, sl };
-    if (cards.some((r) => r.error) || hp.error || sl.error) return { status: 'error', message: '请检查标红的输入', parsed };
-    if (cards.every((r) => r.empty)) return { status: 'idle', message: '输入均伤和 HP 后自动计算', parsed };
-    if (hp.empty) return { status: 'idle', message: '再输入 HP 就能算出击破概率', parsed };
+    const cardsOk = !cards.some((r) => r.error) && !cards.every((r) => r.empty);
     const avgs = cards.map((r) => r.value);
-    const prep = prepared(avgs);
+    const prep = cardsOk ? prepared(avgs) : null;      // 均伤填好了就先算总伤害范围、平均（不用等 HP）
+    if (!cardsOk || hp.error || sl.error) {
+      if (cards.every((r) => r.empty) && !cards.some((r) => r.error) && !hp.error && !sl.error) return { status: 'idle', message: '输入均伤和 HP 后自动计算', parsed };
+      return { status: 'error', message: '请检查标红的输入', parsed, prep };
+    }
+    if (hp.empty) return { status: 'idle', message: '再输入 HP 就能算出击破概率', parsed, prep };
     const kills = K.countAtLeast(prep, hp.value);
     const single = kills / prep.total;
-    return { status: 'ok', single, final: kills === prep.total ? 1 : withSL(single, sl.value), sl: sl.value, kills, total: prep.total, prep, hp: hp.value, avgs, parsed };
+    const fail = Math.pow((prep.total - kills) / prep.total, sl.value + 1);   // 失败率单独算，击破率接近 100% 时不丢精度
+    return { status: 'ok', single, final: kills === prep.total ? 1 : withSL(single, sl.value), fail, sl: sl.value, kills, total: prep.total, prep, hp: hp.value, avgs, parsed };
   }
 
   /** 百分比，保留 4 位小数；接近 0 或 100% 时不写成 0% / 100% */
@@ -101,6 +105,26 @@
     if (v >= 99.99995) return '> 99.9999%';
     if (v < 0.00005) return '< 0.0001%';
     return v.toFixed(4) + '%';
+  }
+
+  /** 「约每 x 次」里的 x：小的保留小数，大的取整，特别大的用「亿」或科学计数 */
+  function timesText(x) {
+    if (x < 10) return x.toFixed(2);
+    if (x < 100) return x.toFixed(1);
+    if (x < 1e8) return fmt(Math.round(x));
+    if (x < 1e16) return (x / 1e8).toPrecision(3) + ' 亿';
+    const e = Math.floor(Math.log10(x));
+    return (x / Math.pow(10, e)).toFixed(2) + ' × 10^' + e;
+  }
+
+  /**
+   * 成功、失败两种频率：「约每 x 次击破 1 次，约每 y 次失败 1 次」（x = 1/p，y = 1/(1−p)）。
+   * fail 是失败概率，另外传入是为了 p 很接近 1 时不丢精度；p 为 0 或 1 时返回 ''
+   */
+  function frequencyText(p, fail, yes, no) {
+    if (!(p > 0) || !(fail > 0)) return '';
+    const every = (x) => { const t = timesText(x); return '约每 ' + t + (t.endsWith('亿') ? '次' : ' 次'); };
+    return every(1 / p) + yes + ' 1 次，' + every(1 / fail) + no + ' 1 次';
   }
 
   /** 百分比，保留 2 位小数（图表、简短显示） */
@@ -143,7 +167,7 @@
   }
 
   // 由 main.js 读取：综合页用
-  window.KillApp = { store, evaluate, formatPct, formatShort, summary };
+  window.KillApp = { store, evaluate, formatPct, formatShort, frequencyText, summary };
 
   function loadInputs() {
     const d = store.active().data;
@@ -166,12 +190,25 @@
   let current = null;                                    // 最近一次的计算结果（图表用）
   let chartState = null;                                 // 最近一次图表的数据（窗口大小变化时重画）
 
-  function showIdle(message) {
+  /** 总伤害范围、平均（只和均伤有关）；有 HP 时再和 HP 比较 */
+  function damageLines(prep, hp) {
+    const lines = [];
+    if (hp === null) lines.push('总伤害 ' + fmt(prep.min) + ' ~ ' + fmt(prep.max));
+    else if (prep.min >= hp) lines.push('最低伤害 ' + fmt(prep.min) + ' ≥ HP，必定击破');
+    else if (prep.max < hp) lines.push('最高伤害 ' + fmt(prep.max) + ' < HP，无法击破');
+    else lines.push('总伤害 ' + fmt(prep.min) + ' ~ ' + fmt(prep.max));
+    lines.push('平均 ' + fmt(prep.mean) + (hp > 0 ? '，是 HP 的 ' + ((prep.mean / hp) * 100).toFixed(2) + '%' : ''));
+    return lines;
+  }
+
+  const noteHtml = (lines) => lines.map((s) => '<div>' + s + '</div>').join('');
+
+  function showIdle(message, prep) {
     $('probLabel').textContent = '击破概率';
     $('prob').textContent = '—';
     $('prob').classList.add('idle');
     $('meter').hidden = true;
-    $('note').textContent = message;
+    $('note').innerHTML = noteHtml((prep ? damageLines(prep, null) : []).concat(message));
     $('chartPanel').hidden = true;
     $('slPanel').hidden = true;
     chartState = null;
@@ -191,7 +228,7 @@
     });
     setHint(4, hp.error, !!hp.error);
     setHint(5, sl.error, !!sl.error);
-    if (r.status !== 'ok') return showIdle(r.message);
+    if (r.status !== 'ok') return showIdle(r.message, r.prep);
 
     const { prep, kills } = r;
     $('probLabel').textContent = r.sl ? '击破概率（SL ' + r.sl + ' 次）' : '击破概率';
@@ -202,11 +239,9 @@
 
     const lines = [];
     if (r.sl) lines.push('单次击破率 ' + formatPct(r.single) + '，失败后可以重来 ' + r.sl + ' 次');
-    if (prep.min >= r.hp) lines.push('最低伤害 ' + fmt(prep.min) + ' ≥ HP，必定击破');
-    else if (prep.max < r.hp) lines.push('最高伤害 ' + fmt(prep.max) + ' < HP，无法击破');
-    else lines.push('总伤害 ' + fmt(prep.min) + ' ~ ' + fmt(prep.max));
-    if (r.hp > 0) lines.push('平均 ' + fmt(prep.mean) + '，是 HP 的 ' + ((prep.mean / r.hp) * 100).toFixed(2) + '%');
-    $('note').innerHTML = lines.map((s) => '<div>' + s + '</div>').join('');
+    const freq = frequencyText(r.final, r.fail, '击破', '失败');
+    if (freq) lines.push(freq);
+    $('note').innerHTML = noteHtml(lines.concat(damageLines(prep, r.hp)));
 
     renderSLTable(r);
 

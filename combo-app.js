@@ -103,6 +103,8 @@
         return b.factors.length > 1 && r.blocks.filter((x) => x.factors.length).length > 1 ? '(' + s + ')' : s;
       });
       html += '<div class="formula">= ' + (parts.length ? parts.join(' × ') : '100%') + '</div>';
+      const freq = Kill.frequencyText(r.value, 1 - r.value, '成功', '失败');
+      if (freq) html += '<div>' + freq + '</div>';
       if (r.weakest && r.factors.length > 1) {
         const w = r.weakest;
         html += '<div>拖累最大：' + (w.kind === 'deal' ? rangeText(w.turn, w.to) + ' 发牌「' : 'T' + (w.turn + 1) + ' 击破「') +
