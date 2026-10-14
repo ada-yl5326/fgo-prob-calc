@@ -131,10 +131,13 @@
    * SL（失败后重来）n 次后的击破率：一共 n + 1 次机会，每次重新抽随机数、互相独立，至少击破一次：
    *     1 − (1 − p)^(n+1)
    * 用 log1p / expm1 计算，p 很小时也不损失精度。
+   * 单次击破率不是 100% 时，结果最多到 1 − 1e-15：SL 次数很多时双精度会算成正好 1，显示成「100%」，
+   * 封顶后显示为「> 99.9999%」（Excel 版的 SL 公式相同）。
    */
+  var SL_CAP = 1 - 1e-15;
   function withSL(p, sl) {
     if (p <= 0 || p >= 1 || !sl) return p;
-    return -Math.expm1((sl + 1) * Math.log1p(-p));
+    return Math.min(-Math.expm1((sl + 1) * Math.log1p(-p)), SL_CAP);
   }
 
   var api = {
