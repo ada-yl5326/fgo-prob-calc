@@ -433,7 +433,28 @@
     return turnCount(d) === 1 ? s.replace(/^第 1 回合：?/, '') : s;   // 单回合时不用写「第 1 回合」
   });
 
-  window.DealApp = { store, evaluate, summary, altTexts };
+  /**
+   * 每种条件的简短写法（综合页条件格的标题用），只写牌：例如「BB」「BA」；
+   * 几名从者都指定了牌时加编号「1:BB 2:A」，几个回合时加「T2」，仅含加「(仅)」，一张都不能有写「无」
+   */
+  const altShorts = (d) => d.alts.map((a, k) => {
+    const v = view(d, k), T = turnCount(v), turns = [];
+    const active = [];
+    for (let o = 0; o < v.servants; o++) if (ownerOn(v, o)) active.push(o);
+    for (let t = 0; t < T; t++) {
+      const parts = [];
+      active.forEach((o) => {
+        const m = cellMode(v, o, t), own = v.owners[o];
+        if (m === 'free') return;
+        const cards = m === 'none' ? '无' : picksIn(v, o, t).map((i) => (own.marked[i] ? '纹' : '') + own.deck[i] + markSuffix(own, i)).join('') + (m === 'exact' ? '(仅)' : '');
+        parts.push((active.length > 1 ? (o + 1) + ':' : '') + cards);
+      });
+      if (parts.length) turns.push((T > 1 ? 'T' + (t + 1) + ' ' : '') + parts.join(' '));
+    }
+    return turns.join('，') || '不限';
+  });
+
+  window.DealApp = { store, evaluate, summary, altTexts, altShorts };
 
   // ---------- 事件 ----------
 

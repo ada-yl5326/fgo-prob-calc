@@ -175,7 +175,9 @@
     if (Object.keys(errors).length) return Object.assign(res, { status: 'error', message: '请检查标红的输入' });
     if (!typed) return Object.assign(res, { status: 'idle', message: '输入敌方均伤和我方 HP 后自动计算' });
     if (missing) return Object.assign(res, { status: 'idle', message: '还要填：' + missing });
-    if (!d.servants.some((s) => s.role === 'must')) return Object.assign(res, { status: 'idle', message: '至少要有一名「要退场」的从者' });
+    if (!d.servants.some((s) => s.role === 'must' || s.role === 'keep')) {
+      return Object.assign(res, { status: 'idle', message: '至少要有一名「要退场」或「不能退场」的从者' });
+    }
     const cfg = { enemies, servants, backup: d.backup };
     try { S.model(cfg); } catch (e) { return Object.assign(res, { status: 'error', message: e.message }); }
     return Object.assign(res, { status: 'ok', cfg, sl: sl.value });
@@ -504,7 +506,8 @@
   function show(r, b) {
     if (r.status !== 'ok') { showIdle(r.message); return; }
     const res = r.result, d = store.active().data;
-    $('sendLabel').textContent = r.sl ? '送人成功率（SL ' + r.sl + ' 次）' : '送人成功率';
+    const label = d.servants.some((s) => s.role === 'must') ? '送人成功率' : '不退场的概率';   // 只设了「不能退场」：都没退场的概率
+    $('sendLabel').textContent = r.sl ? label + '（SL ' + r.sl + ' 次）' : label;
     $('sendProb').textContent = pct(r.final);
     $('sendProb').classList.remove('idle');
     $('sendMeterBox').hidden = false;
@@ -549,8 +552,11 @@
     });
     h += '</tbody></table><ul class="sd-facts">';
     if (res.fail > 0) {
-      h += '<li>失败 ' + short(res.fail) + '：要退场的没有全部退场 ' + short(res.mustAlive) +
-        (d.servants.some((s) => s.role === 'keep') ? '，不能退场的退场了 ' + short(res.keepDead) + '（两者可能同时发生）' : '') + '</li>';
+      const hasMust = d.servants.some((s) => s.role === 'must'), hasKeep = d.servants.some((s) => s.role === 'keep');
+      const why = [];
+      if (hasMust) why.push('要退场的没有全部退场 ' + short(res.mustAlive));
+      if (hasKeep) why.push('不能退场的退场了 ' + short(res.keepDead));
+      h += '<li>失败 ' + short(res.fail) + '：' + why.join('，') + (why.length > 1 ? '（两者可能同时发生）' : '') + '</li>';
     }
     if (res.endGuts > 0) h += '<li>没有后备队友、只剩一人时被打出战续，回合中断：' + short(res.endGuts) + '</li>';
     if (res.endTaunt > 0) h += '<li>嘲讽的从者全部退场，回合中断：' + short(res.endTaunt) + '</li>';

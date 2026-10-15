@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Laplace NS · 击破与发牌概率</title>
-<meta name="description" content="精确计算一回合的击破概率（含 SL）、前几回合发到指定牌的概率，以及多回合方案的综合击破率">
+<meta name="description" content="精确计算一回合的击破概率（含 SL）、发牌概率、buff 成功率、送人概率，以及按世界线计算多回合方案的综合击破率">
 <meta name="theme-color" content="#f3f4f6" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#101216" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -47,10 +47,11 @@
     <button type="button" class="theme-btn" id="themeBtn"></button>
   </header>
   <nav class="tabs" role="tablist" aria-label="功能">
-    <button type="button" role="tab" data-tab="kill" aria-controls="viewKill">击破概率</button>
-    <button type="button" role="tab" data-tab="deal" aria-controls="viewDeal">发牌概率</button>
-    <button type="button" role="tab" data-tab="send" aria-controls="viewSend">送人概率</button>
-    <button type="button" role="tab" data-tab="combo" aria-controls="viewCombo">综合击破概率</button>
+    <button type="button" role="tab" data-tab="kill" aria-controls="viewKill"><span class="tab-long">击破概率</span><span class="tab-short">击破</span></button>
+    <button type="button" role="tab" data-tab="deal" aria-controls="viewDeal"><span class="tab-long">发牌概率</span><span class="tab-short">发牌</span></button>
+    <button type="button" role="tab" data-tab="buff" aria-controls="viewBuff"><span class="tab-long">buff 成功率</span><span class="tab-short">buff</span></button>
+    <button type="button" role="tab" data-tab="send" aria-controls="viewSend"><span class="tab-long">送人概率</span><span class="tab-short">送人</span></button>
+    <button type="button" role="tab" data-tab="combo" aria-controls="viewCombo"><span class="tab-long">综合击破概率</span><span class="tab-short">综合</span></button>
   </nav>
 
   <!-- ==================== 击破概率 ==================== -->
@@ -125,7 +126,8 @@
         <li><b>伤害组</b>：可以保存好几组输入（例如每个回合一组、每种牌型一组），在「综合击破概率」页放进各个回合。</li>
         <li><b>伤害分布</b>：柱子 = 总伤害落在这一段的概率；点按某处，显示总伤害 ≥ 该处的概率（即 HP 为该处时的击破率）。<b>击破概率曲线</b>：高度 = HP 为 X 时的击破率，紫色是 SL 后的击破率；点按或滑动可以查看任意 HP。有 AOE 目标时，曲线高度已乘上 AOE 目标的击破率，纵轴跟着最高点缩放。</li>
         <li>添加到主屏幕后像 App 一样使用，断网也能用。iPhone：Safari →「分享」→「添加到主屏幕」；安卓：浏览器菜单 →「添加到主屏幕」或「安装应用」。右上角的按钮切换外观（自动 / 浅色 / 深色）。</li>
-        <li><b>工作目录</b>（左上角）：把全部伤害组、发牌组、送人组和方案存成一个工作目录，可以存好几个、随时切换；导出成文件 / 分享码 / 分享链接 / 二维码发给别人，或者导入别人分享的内容（可以直接从相册选二维码图片，不需要相册权限）。数据只存在这台设备的浏览器里，重要的请导出成文件备份。</li>
+        <li><b>分享图片</b>：每页结果下面的「生成分享图片」把这一页的主要信息排成一张图片，可以保存或复制后发给别人（想让别人导入同样的设置，用工作目录的导出）。</li>
+        <li><b>工作目录</b>（左上角）：把全部伤害组、发牌组、buff 组、送人组和方案存成一个工作目录，可以存好几个、随时切换；导出成文件 / 分享码 / 分享链接 / 二维码发给别人，或者导入别人分享的内容（可以直接从相册选二维码图片，不需要相册权限）。数据只存在这台设备的浏览器里，重要的请导出成文件备份。</li>
       </ul>
     </details>
   </div>
@@ -177,6 +179,43 @@
         <li><b>或者</b>：几种发牌都可以接受时（例如 BA、BQ、BB 都行），点「＋ 或者」加一种条件，最多 5 种，满足任意一种即可。不能把各条件的概率直接相加（同一手牌可能同时满足几种，会重复计算），这里用容斥原理精确计算，过程见「计算过程」。几种牌型打出的伤害不同时，到「综合击破概率」页用「按条件分配伤害」。</li>
         <li><b>纹章</b>：开了纹章的牌只认这一张；同色几张都开纹章时按 ①②③ 区分，互不替代。</li>
         <li>换人、从者退场、洗牌技能会改变牌库，这里不算；退场后重新洗牌，请在「综合击破概率」页用新的发牌组表示。</li>
+      </ul>
+    </details>
+  </div>
+
+  <!-- ==================== buff 成功率 ==================== -->
+  <div id="viewBuff" role="tabpanel" hidden>
+    <div id="buffGroups"></div>
+
+    <section class="result" aria-live="polite">
+      <div class="result-label">buff 成功率（放在我方行动阶段）</div>
+      <div class="result-value idle" id="buffProb">—</div>
+      <div class="meter" id="buffMeterBox" hidden><span id="buffMeter"></span></div>
+      <div class="result-note" id="buffNote">输入每个 buff 的成功率后自动计算</div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">buff <span class="panel-sub">每个 buff 单独判定、单独 SL，全部成功才算成功</span></div>
+      <div id="buffItems"></div>
+      <button type="button" class="aoe-add" id="buffAdd" data-act="add">＋ buff</button>
+      <div class="actions"><button type="button" data-act="clear-inputs">清空</button></div>
+    </section>
+
+    <section class="panel" id="buffStepsPanel" hidden>
+      <div class="panel-title">计算过程</div>
+      <div class="steps" id="buffSteps"></div>
+    </section>
+
+    <details class="panel about">
+      <summary>buff 规则与使用说明</summary>
+      <ul>
+        <li><b>buff 成功率</b>：给敌方或我方加 buff / debuff 时，有的不是必中的。一个 buff 组可以放好几个 buff，全部成功才算成功：成功率 = 各 buff 的成功率相乘。</li>
+        <li><b>普通 buff</b>：直接填成功率。</li>
+        <li><b>二项分布 buff</b>：一个技能判定好几次（例如一次打 3 个敌人），命中次数「至少 / 恰好 / 至多」x 次才算成功。每次的成功率可以相同，也可以分别填（例如几个敌人的弱体耐性不同）。
+          不要把一个技能拆成几个普通 buff：SL 时这几次判定会一起重抽，拆开算会偏高，「至少 2 个」也没法表示。</li>
+        <li><b>SL 次数</b>：每个 buff 自己的 SL 次数。技能一个一个放，一个 buff 失败时可以 SL 重抽它，成功后再放下一个，前面的结果保留：SL n 次后 = 1 − (1 − 单次成功率)^(n+1)。</li>
+        <li><b>两个结果</b>：放在综合页的「我方 buff」一行时，用各自 SL 后相乘的成功率；放在「敌方 buff」一行（敌方行动阶段、送人之前的判定）时，每条世界线只判定一次、不能单独 SL，用单次成功率相乘。</li>
+        <li><b>buff 组</b>：可以保存好几组，放进「综合击破概率」页。</li>
       </ul>
     </details>
   </div>
@@ -241,7 +280,7 @@
         <li><b>宝具</b>：选预设在第几次行动放；宝具不判定开技能、暴击，不受牌型影响；不填均伤 = 无伤害宝具。</li>
         <li><b>合法目标</b>：每次行动（开技能除外）先选目标：场上有嘲讽的从者时只选有嘲讽的；被这个敌人打出战续、带着「对它不合法」状态的从者不能选。没有合法目标时这次行动被跳过，行动次数照样用掉，预设的动作（例如宝具）顺延到下一次。全体攻击选定目标后打到所有在场的从者。</li>
         <li><b>被攻击权重</b>：在合法目标里按权重随机选，选中的概率 = 自己的权重 ÷ 合法目标的权重之和；空着 = 1。</li>
-        <li><b>角色</b>：要退场（没退场就失败）、可以退场（无所谓）、不能退场（退场就失败）、不会死（不填 HP）。</li>
+        <li><b>角色</b>：要退场（没退场就失败）、可以退场（无所谓）、不能退场（退场就失败）、不会死（不填 HP）。至少要有一名「要退场」或「不能退场」；只设「不能退场」时，算的是他们都没退场的概率。</li>
         <li><b>无敌</b>：每次受到攻击，伤害为 0、次数 −1（无伤害宝具不消耗）。<b>战续</b>：累计伤害达到 HP 时以战续血量复活、伤害重新累计，可以有几次；战续不算退场。被普通攻击或暴击打出战续，或者有嘲讽的从者被宝具打出战续，会获得「对这个敌人不合法」，持续一次行动；被宝具打出战续时场上只剩他一人且有后备队友，也一样。</li>
         <li><b>中断回合</b>：没有后备队友、场上只剩一名从者时他被打出战续；或者一开始有嘲讽的从者，后来全部退场了。</li>
         <li><b>SL 次数</b>：送人失败时可以重来几次，每次重新抽全部随机数：成功率 = 1 − (1 − 单次成功率)^(n+1)。</li>
@@ -262,17 +301,22 @@
     <div class="notice" id="comboNotice" hidden></div>
 
     <section class="panel">
-      <div class="panel-title">伤害组 <span class="panel-sub">放到「击破」一栏；击破率已含 SL</span></div>
-      <div class="palette" id="paletteKill"></div>
-      <div class="panel-title">发牌组 <span class="panel-sub">放到「发牌」一栏，占的回合数 = 共享范围</span></div>
+      <div class="panel-title">发牌组 <span class="panel-sub">放到「发牌」一行，占的回合数 = 共享范围</span></div>
       <div class="palette" id="paletteDeal"></div>
-      <div class="panel-title">送人组 <span class="panel-sub">放到「送人」一栏（敌方行动阶段）</span></div>
+      <div class="panel-title">buff 组 <span class="panel-sub">放到「我方 buff」或「敌方 buff」一行</span></div>
+      <div class="palette" id="paletteBuff"></div>
+      <div class="panel-title">伤害组 <span class="panel-sub">放到「击破」一行；SL 次数 = 能换几次出牌</span></div>
+      <div class="palette" id="paletteKill"></div>
+      <div class="panel-title">送人组 <span class="panel-sub">放到「送人」一行（敌方行动阶段）</span></div>
       <div class="palette" id="paletteSend"></div>
       <div class="option-hint" id="paletteHint"></div>
     </section>
 
     <section class="panel">
-      <div class="timeline" id="timeline"></div>
+      <div class="panel-sub tl-legend">每列一个回合，从上往下是结算顺序（<span class="my">蓝 = 我方行动阶段</span>，<span class="enemy">紫 = 敌方行动阶段</span>）；回合多时可以左右滑动</div>
+      <div class="tl-box" id="timelineBox"><div class="timeline" id="timeline"></div></div>
+      <div class="extra-box" id="extraBox" hidden></div>
+      <div class="global-row"><span id="globalSl"></span><span class="option-hint">整个方案共用：每条世界线从头到尾一共只能用这么多次，用在哪一步都可以</span></div>
       <div class="turn-bar">
         <button type="button" id="turnMinus" aria-label="删除最后一个回合">−</button>
         <span id="turnCount"></span>
@@ -289,24 +333,23 @@
     <details class="panel about">
       <summary>计算规则与使用说明</summary>
       <ul>
-        <li><b>综合击破概率</b> = 各回合的击破率（含 SL）× 各发牌组的发牌概率（按条件分配的那一轮另算，见下）。没放伤害组的回合算 100%，没被发牌组占用的回合不要求发牌。</li>
-        <li><b>回合</b> = 我方行动阶段（发牌、击破）+ 敌方行动阶段（送人）。没放送人组 = 不需要送人（100%），结果和以前完全一样。</li>
-        <li><b>送人组</b>：SL 或换打法时，我方和敌方的随机数一起重新抽，所以按每一次尝试计算：每次尝试 = 伤害组的击破率 × 送人组的成功率（都不含 SL），尝试次数 = 伤害组的 SL 次数 + 1；这一回合 = 1 − (1 − 每次尝试)^(SL+1)。没放伤害组的回合用送人组自己的 SL 次数。</li>
-        <li>送人组不影响洗牌的计算：在共享发牌的回合中间放送人组，只是多乘一个概率（可以用来算「某回合某名从者受到 xx 以上伤害」）。</li>
-        <li><b>发牌组</b>占几个回合由它的「回合」设置决定（1 / 2 / 3 格），放在第 k 回合表示第 k 回合重新洗牌。同一个组可以用在好几个回合。</li>
+        <li><b>世界线</b>：一条世界线 = 从头到尾的一次完整经过（包括在哪里失败、在哪里 SL）。综合击破概率 = 能走到成功的世界线的概率之和。随机的分叉（判定成功 / 失败、发到哪种牌）按概率相加；自己选的分叉（用哪种方法救、先试哪种出牌、用哪组 buff）每种都走一遍，取结果最好的。完整规则见 GitHub 上的《世界线规则》。</li>
+        <li><b>回合</b>：每列一个回合，从上往下是结算顺序：发牌 → 我方 buff → 击破 → 敌方 buff → 送人。空着的格子 = 不需要（100%）。没放 buff 组、没设额外 SL 的方案，结果和 v0.9 相同。</li>
+        <li><b>我方 buff</b>：buff 一个一个判定，失败时用这个 buff 自己的 SL 次数重抽（只重抽它，前面的保留）；之后换出牌也不会重新放技能。buff 组全部成功 → 用「击破」格的伤害组；有失败 → 用下面「我方 buff 没成功时用」格的伤害组（空着 = 失败）。</li>
+        <li><b>击破 → 敌方 buff → 送人</b>：换出牌 = 一条新的世界线，击破、敌方 buff、送人一起重新判定。换出牌的次数 = 伤害组的 SL 次数（没放伤害组时 = 送人组的 SL 次数）；送人组自己的 SL 不另外算。敌方 buff 每条世界线判定一次；全部成功 → 用「送人」格的送人组，有失败 → 用「敌方 buff 没成功时用」格的送人组（空着 = 失败）。</li>
+        <li><b>额外 SL</b>：每个阶段格子（我方 buff / 击破 / 敌方 buff / 送人）下面有「＋额外 SL」，给这一回合的这个阶段加几次 SL，只能在这个阶段用；「全局额外 SL」整个方案共用。发牌组下面也有「＋额外 SL」：看到牌之后可以重新发牌，但只能用发牌阶段专用的次数（全局额外 SL 不能用来重新发牌）。用在哪一步，就只重抽那一步和后面的（例如送人失败时用一次，击破的结果保留）。有全局额外 SL 时，前面的回合用掉了后面就少了，结果不能拆成各回合相乘。</li>
+        <li><b>发牌组</b>占几个回合由它的「回合」设置决定（1 / 2 / 3 列），放在第 k 回合表示第 k 回合重新洗牌。同一个组可以用在好几个回合。</li>
         <li><b>洗牌</b>：3 人每 3 回合洗一次牌（2 人每 2 回合），有从者退场时下一回合立刻洗牌。发牌组放在不是正常洗牌的回合时，会提示「需要前一回合有从者退场」，请自己确认。</li>
-        <li><b>按条件分配</b>：发牌组有「或者」的几种条件、各牌型打出的伤害不同时，在被它占用的回合点「按条件分配」，给每种条件各放一个伤害组。条件格空着 = 这种牌型不需要击破（100%）。不点时，不管满足哪种条件都用同一个伤害组。不同打法让敌方阶段不一样时，条件格右边也可以各放一个送人组（空着 = 跟随回合的送人组）。</li>
-        <li><b>满足好几种条件时</b>：每种条件的打法（伤害组 + 送人组）各打一次（SL 换打法，任意一次成功即可），成功率 = 1 − Π(1 − 各打法的成功率)；伤害组、送人组都相同的只算一次。牌型相同的几种条件可以用来表示同一手牌的不同出牌顺序。过程列在结果下面。</li>
-        <li><b>其他</b>格：一种条件都没满足（没发到想要的牌）时的打法，例如只靠宝具；空着 = 这时失败。</li>
-        <li>发牌组占好几个回合、几种条件又在不同回合有差别时，按条件分配伤害相当于「看到后面的牌再决定按哪种打」，结果可能略偏高。</li>
-        <li>每个回合的 SL 各算各的；「整个方案一共只能 SL 几次」这种情况不在计算范围内。</li>
-        <li>操作：按住组拖到回合里，或者先点组、再点格子；放好的组按住左边的 ⠿ 可以拖到别的格子，点 × 移除。条件格的操作相同，点「合并」变回一格。</li>
+        <li><b>按条件分配</b>：发牌组有「或者」的几种条件、各牌型的打法不同时，在被它占用的回合点「按条件分配」，这一列分成「回合 / 条件 1 … / 其他」几小列，每小列从上往下就是一种打法。条件格的伤害组空着 = 不需要击破；其他格空着 = 失败；我方 buff、敌方 buff、送人空着 = 跟随「回合」那一小列。</li>
+        <li><b>满足好几种条件时</b>：同一个伤害组 = 同一种出牌，只试一次；不同伤害组 = 不同出牌，各试一遍（任意一种成功即可）。用不同 buff 组的打法只能选一种（技能只能放一次）。过程列在「计算过程」里。</li>
+        <li>发牌组占好几个回合、几种条件又在不同回合有差别时，按条件分配相当于「看到后面的牌再决定按哪种打」，结果可能略偏高。</li>
+        <li>操作：按住组拖到格子里，或者先点组、再点格子；放好的组按住左边的 ⠿ 可以拖到别的格子，点 × 移除。点「合并」把分了条件的回合变回一列。</li>
       </ul>
     </details>
   </div>
 
   <footer>
-    <div>v0.9 · 计算全部在本机完成，不上传任何数据</div>
+    <div>v1.0 · 计算全部在本机完成，不上传任何数据</div>
     <div class="footer-links">
       <a href="https://github.com/ada-yl5326/fgo-prob-calc" target="_blank" rel="noopener">GitHub 仓库</a> ·
       <a href="https://space.bilibili.com/28108391" target="_blank" rel="noopener">作者 B站主页</a>
@@ -321,14 +364,17 @@
 <script src="deal.js"></script>
 <script src="combo.js"></script>
 <script src="send.js"></script>
+<script src="buff.js"></script>
 <script src="app.js"></script>
 <script src="deal-app.js"></script>
 <script src="send-app.js"></script>
+<script src="buff-app.js"></script>
 <script src="combo-app.js"></script>
 <script src="share.js"></script>
 <script src="qr.js"></script>
 <script src="qr-read.js"></script>
 <script src="workspace-app.js"></script>
+<script src="summary-app.js"></script>
 <script src="main.js"></script>
 </body>
 </html>

@@ -1,9 +1,9 @@
 /*
  * 工作文件的导入导出（不依赖页面：网页、Node 测试都能用）。
  *
- * 工作文件 = 一个工作目录的全部内容：伤害组、发牌组、送人组、综合页的方案。
- *     { app: 'Laplace NS', format: 3, name, exportedAt, data: { kill: { groups }, deal: { groups }, send: { groups }, combo: 方案 } }
- *     （format 2 以前没有送人组，读进来送人组为空）
+ * 工作文件 = 一个工作目录的全部内容：伤害组、发牌组、送人组、buff 组、综合页的方案。
+ *     { app: 'Laplace NS', format: 4, name, exportedAt, data: { kill: { groups }, deal: { groups }, send: { groups }, buff: { groups }, combo: 方案 } }
+ *     （format 2 以前没有送人组、format 3 以前没有 buff 组，读进来为空）
  * 文件就是这段 JSON（方便阅读）。
  * 分享码用更短的紧凑格式（见 compact()：不写字段名和组的编号，牌型、选牌写成短字符串，数字去掉千分位逗号），
  *     「LN2z.」+ 压缩后的 base64url；不压缩更短、或浏览器不支持压缩时用「LN2r.」。
@@ -15,8 +15,9 @@
   'use strict';
 
   var APP = 'Laplace NS';
-  var FORMAT = 3;                                        // 文件格式的版本：以后改格式时加 1，并继续能读旧版本（2 = v0.8 起伤害维度可以增减；3 = v0.9 起有送人组）
-  var COMPACT = 4;                                       // 紧凑格式（分享码）的版本，见 compact()
+  var FORMAT = 4;                                        // 文件格式的版本：以后改格式时加 1，并继续能读旧版本（2 = v0.8 起伤害维度可以增减；3 = v0.9 起有送人组；4 = v1.0 起有 buff 组）
+  var COMPACT = 5;                                       // 紧凑格式（分享码）的版本，见 compact()
+  var MODES = ['atLeast', 'exactly', 'atMost'];          // 二项分布 buff：至少 / 恰好 / 至多
   var DECKS = ['BBBAQ', 'BBAAQ', 'BBAQQ', 'BAAQQ', 'BAAAQ', 'BAQQQ'];
   var ROLES = ['must', 'may', 'keep', 'immortal'];       // 送人组的从者角色：要退场 / 可以退场 / 不能退场 / 不会死
   var MAX_TEXT = 2 * 1024 * 1024;                        // 导入的内容最多 2 MB
@@ -57,18 +58,22 @@
     var groups = function (x) { return x && Array.isArray(x.groups) ? x.groups : []; };
     return {
       name: String(obj.name || '导入的工作目录').slice(0, 30),
-      data: { kill: { groups: groups(d.kill) }, deal: { groups: groups(d.deal) }, send: { groups: groups(d.send) },
+      data: { kill: { groups: groups(d.kill) }, deal: { groups: groups(d.deal) }, send: { groups: groups(d.send) }, buff: { groups: groups(d.buff) },
         combo: d.combo && typeof d.combo === 'object' ? d.combo : null },
     };
   }
 
   // ---------- 紧凑格式（分享码用）----------
-  // [4, 名称, 伤害组们, 发牌组们, 方案, 送人组们]；组用在数组里的位置（从 1 开始）互相引用，0 = 没有。
+  // [5, 名称, 伤害组们, 发牌组们, 方案, 送人组们, buff 组们]；组用在数组里的位置（从 1 开始）互相引用，0 = 没有。
   //   伤害组：[名称, [主目标各维度的均伤], HP, SL, [[AOE 1 各维度的均伤…, AOE 1 HP], …]]（末尾空的项省略）
   //   （版本 2 = v0.7 以前，主目标固定 4 维、AOE 目标 1 维：[名称, 4 张卡的均伤, HP, SL, [AOE 1 群体伤害, AOE 1 HP, …]]，仍然能读）
   //   发牌组：[名称, 人数 × 10 + 回合范围, 「配卡+纹章位」用 | 隔开, [[15 位选牌, 仅含位, 不能有位], …], 正在编辑第几种条件]
-  //   方案：[回合数, 各回合的伤害组, [[第几回合, 发牌组], …], [[第几回合, [各条件的伤害组], 其他, [各条件的送人组], 其他的送人组], …],
-  //          各回合的送人组]（分条件的格子没放送人组时，后两项省略）
+  //   方案：[回合数, 各回合的伤害组, [[第几回合, 发牌组], …], [分条件的回合, …], 各回合的送人组, 各回合的我方 buff 组, 各回合的敌方 buff 组,
+  //          各回合的「我方 buff 失败时」伤害组, 各回合的「敌方 buff 失败时」送人组, 各回合的额外 SL（[我方 buff, 击破, 敌方 buff, 送人, 发牌]（末尾的 0 省略）或 0）, 全局额外 SL]
+  //     分条件的回合：[第几回合, [各条件的伤害组], 其他, [各条件的送人组], 其他的送人组, [我方 buff 组], 其他的, [敌方 buff 组], 其他的,
+  //                    [我方 buff 失败时的伤害组], 其他的, [敌方 buff 失败时的送人组], 其他的]（末尾空的项省略）
+  //   buff 组：[名称, buff 们]；buff：[名称, 成功率, SL]（普通）或 [名称, 成功率, SL, 1, 判定次数, 命中次数, 至少 0 / 恰好 1 / 至多 2, 分别填 ? 1 : 0, [每次的成功率]]
+  //   （版本 4 = v0.9，没有 buff 组，方案里没有 buff、失败时、额外 SL，仍然能读）
   //   送人组：[名称, 敌人们, 从者们, 有后备队友 ? 1 : 0, SL]
   //     敌人：[行动次数, 普通攻击均伤, 开关位, 暴击均伤, 暴击率, 牌型（DECKS 里第几个，从 1 开始）, 放宝具的位（第 k 次 = 第 k−1 位）,
   //           宝具均伤, 开技能概率, [对各从者的伤害倍率]]
@@ -129,12 +134,36 @@
     return { id: 's' + (i + 1), name: str(r[0]), data: { enemies: enemies, servants: servants, backup: r[3] !== 0, sl: str(r[4]) } };
   }
 
+  /** buff 组 → 紧凑格式 */
+  function compactBuff(g) {
+    var x = g.data || {};
+    return trim([str(g.name), arr(x.items).map(function (it) {
+      var row = [str(it.name), num(it.p), num(it.sl)];
+      if (it.type === 'binom') row.push(1, it.n || 3, num(it.x), Math.max(0, MODES.indexOf(it.mode)), it.each ? 1 : 0, it.each ? arr(it.ps).map(num) : []);
+      return trim(row, function (v) { return v === '' || v === 0 || (Array.isArray(v) && !v.length); });
+    })], blank);
+  }
+
+  /** 紧凑格式 → buff 组（读进页面后还会经过 buff 页自己的检查） */
+  function expandBuff(r, i) {
+    r = arr(r);
+    var items = arr(r[1]).map(function (it) {
+      it = arr(it);
+      var n = int(it[4], 1, 100) || 3, ps = arr(it[8]).map(str);
+      return { name: str(it[0]), type: it[3] === 1 ? 'binom' : 'plain', p: str(it[1]), sl: str(it[2]), n: n, x: str(it[5]),
+        mode: MODES[int(it[6], 0, 2) || 0], each: it[7] === 1, ps: ps.length ? ps : ['', '', ''] };
+    });
+    if (!items.length) items.push({ name: '', type: 'plain', p: '', sl: '', n: 3, x: '', mode: 'atLeast', each: false, ps: ['', '', ''] });
+    return { id: 'b' + (i + 1), name: str(r[0]), data: { items: items } };
+  }
+
   function compact(file) {
     var d = file.data, plan = d.combo;
-    var kIndex = {}, dIndex = {}, sIndex = {}, sendGroups = d.send ? arr(d.send.groups) : [];
+    var kIndex = {}, dIndex = {}, sIndex = {}, bIndex = {}, sendGroups = d.send ? arr(d.send.groups) : [], buffGroups = d.buff ? arr(d.buff.groups) : [];
     d.kill.groups.forEach(function (g, i) { kIndex[g.id] = i + 1; });
     d.deal.groups.forEach(function (g, i) { dIndex[g.id] = i + 1; });
     sendGroups.forEach(function (g, i) { sIndex[g.id] = i + 1; });
+    buffGroups.forEach(function (g, i) { bIndex[g.id] = i + 1; });
     var K = d.kill.groups.map(function (g) {
       var x = g.data || {};
       var aoe = (x.aoe || []).map(function (a) { return (a.cards || []).map(num).concat(num(a.hp)); });
@@ -161,26 +190,36 @@
     });
     var C = null;
     if (plan) {
-      C = [plan.turns,
-        trim((plan.kill || []).map(function (id) { return kIndex[id] || 0; }), function (v) { return v === 0; }),
+      var zero = function (v) { return v === 0; };
+      var none = function (v) { return v === 0 || (Array.isArray(v) && !v.some(Boolean)); };
+      var refs = function (list, index) { return trim(arr(list).map(function (id) { return index[id] || 0; }), zero); };
+      C = [plan.turns, refs(plan.kill, kIndex),
         (plan.deal || []).filter(function (p) { return dIndex[p.id]; }).map(function (p) { return [p.at, dIndex[p.id]]; }),
         (plan.split || []).map(function (sp, i) {
           if (!sp) return null;
-          var row = [i, (sp.alts || []).map(function (id) { return kIndex[id] || 0; }), kIndex[sp.other] || 0];
-          var sends = arr(sp.sends).map(function (id) { return sIndex[id] || 0; }), other = sIndex[sp.sendOther] || 0;
-          if (sends.some(Boolean) || other) row.push(sends, other);
+          var cells = function (list, index) { return arr(list).map(function (id) { return index[id] || 0; }); };
+          var row = [i, cells(sp.alts, kIndex), kIndex[sp.other] || 0, cells(sp.sends, sIndex), sIndex[sp.sendOther] || 0,
+            cells(sp.buffs, bIndex), bIndex[sp.buffOther] || 0, cells(sp.ebuffs, bIndex), bIndex[sp.ebuffOther] || 0,
+            cells(sp.kfails, kIndex), kIndex[sp.kfailOther] || 0, cells(sp.sfails, sIndex), sIndex[sp.sfailOther] || 0];
+          while (row.length > 3 && none(row[row.length - 1])) row.pop();     // 前三项（第几回合、各条件的伤害组、其他）一定保留
           return row;
         }).filter(Boolean),
-        trim(arr(plan.send).map(function (id) { return sIndex[id] || 0; }), function (v) { return v === 0; })];
-      trim(C, function (v) { return Array.isArray(v) && !v.length; });
+        refs(plan.send, sIndex), refs(plan.buff, bIndex), refs(plan.ebuff, bIndex), refs(plan.kfail, kIndex), refs(plan.sfail, sIndex),
+        trim(arr(plan.extra).map(function (x) {
+          x = x || {};
+          var v = ['b', 'k', 'e', 's', 'd'].map(function (k) { return int(x[k], 0, 99) || 0; });
+          return v.some(Boolean) ? trim(v, zero) : 0;
+        }), zero),
+        int(plan.global, 0, 99) || 0];
+      trim(C, function (v) { return v === 0 || (Array.isArray(v) && !v.length); });
     }
-    return [COMPACT, str(file.name), K, D, C, sendGroups.map(compactSend)];
+    return [COMPACT, str(file.name), K, D, C, sendGroups.map(compactSend), buffGroups.map(compactBuff)];
   }
 
   /** 紧凑格式 → { name, data }（结构和页面的一样；读进页面后还会经过各页面自己的检查） */
   function expand(a) {
     if (Array.isArray(a) && a[0] > COMPACT) throw new Error('这个分享码来自更新的版本，请先刷新网页、更新到最新版再导入');
-    if (!Array.isArray(a) || [2, 3, 4].indexOf(a[0]) < 0 || !Array.isArray(a[2]) || !Array.isArray(a[3])) throw new Error('无法识别：分享码不完整或已损坏');
+    if (!Array.isArray(a) || [2, 3, 4, 5].indexOf(a[0]) < 0 || !Array.isArray(a[2]) || !Array.isArray(a[3])) throw new Error('无法识别：分享码不完整或已损坏');
     var v2 = a[0] === 2;
     var kill = a[2].map(function (r, i) {
       r = Array.isArray(r) ? r : [];
@@ -222,25 +261,40 @@
       return { id: 'd' + (i + 1), name: str(r[0]), data: { servants: Math.floor(sv / 10), scope: sv % 10, owners: own, alts: alts, alt: int(r[4], 0, 9) || 0 } };
     });
     var send = arr(a[5]).map(expandSend);               // 版本 3 以前没有送人组
+    var buff = arr(a[6]).map(expandBuff);               // 版本 4 以前没有 buff 组
     var combo = null, c = a[4];
     if (Array.isArray(c)) {
       var n = int(c[0], 1, 99) || 3;
       var kid = function (x) { var i = int(x, 1, kill.length); return i ? kill[i - 1].id : null; };
       var did = function (x) { var i = int(x, 1, deal.length); return i ? deal[i - 1].id : null; };
       var sid = function (x) { var i = int(x, 1, send.length); return i ? send[i - 1].id : null; };
-      var plan = { turns: n, kill: [], deal: [], split: [], send: [] };
-      for (var t = 0; t < n; t++) { plan.kill.push(kid((c[1] || [])[t])); plan.split.push(null); plan.send.push(sid(arr(c[4])[t])); }
+      var bid = function (x) { var i = int(x, 1, buff.length); return i ? buff[i - 1].id : null; };
+      var plan = { turns: n, kill: [], deal: [], split: [], send: [], buff: [], ebuff: [], kfail: [], sfail: [], extra: [], global: int(c[10], 0, 99) || 0 };
+      for (var t = 0; t < n; t++) {
+        plan.kill.push(kid((c[1] || [])[t]));
+        plan.split.push(null);
+        plan.send.push(sid(arr(c[4])[t]));
+        plan.buff.push(bid(arr(c[5])[t]));
+        plan.ebuff.push(bid(arr(c[6])[t]));
+        plan.kfail.push(kid(arr(c[7])[t]));
+        plan.sfail.push(sid(arr(c[8])[t]));
+        var x = arr(arr(c[9])[t]);
+        plan.extra.push(x.length ? { d: int(x[4], 0, 99) || 0, b: int(x[0], 0, 99) || 0, k: int(x[1], 0, 99) || 0, e: int(x[2], 0, 99) || 0, s: int(x[3], 0, 99) || 0 } : null);
+      }
       (Array.isArray(c[2]) ? c[2] : []).forEach(function (p) {
         if (Array.isArray(p) && int(p[0], 0, n - 1) !== null && did(p[1])) plan.deal.push({ at: p[0], id: did(p[1]) });
       });
       (Array.isArray(c[3]) ? c[3] : []).forEach(function (s) {
         if (!Array.isArray(s) || int(s[0], 0, n - 1) === null) return;
         var alts = (Array.isArray(s[1]) ? s[1] : []).slice(0, 5).map(kid);
-        plan.split[s[0]] = { alts: alts, other: kid(s[2]), sends: alts.map(function (x, k) { return sid(arr(s[3])[k]); }), sendOther: sid(s[4]) };
+        var each = function (j, f) { return alts.map(function (x, k) { return f(arr(s[j])[k]); }); };
+        plan.split[s[0]] = { alts: alts, other: kid(s[2]), sends: each(3, sid), sendOther: sid(s[4]), buffs: each(5, bid), buffOther: bid(s[6]),
+          ebuffs: each(7, bid), ebuffOther: bid(s[8]), kfails: each(9, kid), kfailOther: kid(s[10]), sfails: each(11, sid), sfailOther: sid(s[12]) };
       });
       combo = plan;
     }
-    return { name: str(a[1]).slice(0, 30) || '导入的工作目录', data: { kill: { groups: kill }, deal: { groups: deal }, send: { groups: send }, combo: combo } };
+    return { name: str(a[1]).slice(0, 30) || '导入的工作目录',
+      data: { kill: { groups: kill }, deal: { groups: deal }, send: { groups: send }, buff: { groups: buff }, combo: combo } };
   }
 
   /** 分享码：紧凑格式 → 压缩（更短时）→ base64url（Promise） */
@@ -292,13 +346,19 @@
    * 只留下方案里用到的组（分享某个方案时，不把无关的组一起带出去）。方案里一个组都没用到时原样返回
    */
   function usedOnly(data) {
-    var plan = data.combo || {}, kill = {}, deal = {}, send = {}, any = false;
-    (plan.kill || []).forEach(function (id) { if (id) { kill[id] = any = true; } });
-    (plan.send || []).forEach(function (id) { if (id) { send[id] = any = true; } });
+    var plan = data.combo || {}, kill = {}, deal = {}, send = {}, buff = {}, any = false;
+    var mark = function (set, list) { arr(list).forEach(function (id) { if (id) { set[id] = any = true; } }); };
+    mark(kill, plan.kill);
+    mark(kill, plan.kfail);
+    mark(send, plan.send);
+    mark(send, plan.sfail);
+    mark(buff, plan.buff);
+    mark(buff, plan.ebuff);
     (plan.split || []).forEach(function (sp) {
       if (!sp) return;
-      (sp.alts || []).concat(sp.other).forEach(function (id) { if (id) { kill[id] = any = true; } });
-      arr(sp.sends).concat(sp.sendOther).forEach(function (id) { if (id) { send[id] = any = true; } });
+      mark(kill, arr(sp.alts).concat(sp.other, arr(sp.kfails), sp.kfailOther));
+      mark(send, arr(sp.sends).concat(sp.sendOther, arr(sp.sfails), sp.sfailOther));
+      mark(buff, arr(sp.buffs).concat(sp.buffOther, arr(sp.ebuffs), sp.ebuffOther));
     });
     (plan.deal || []).forEach(function (p) { if (p && p.id) { deal[p.id] = any = true; } });
     if (!any) return data;
@@ -306,6 +366,7 @@
       kill: { groups: data.kill.groups.filter(function (g) { return kill[g.id]; }) },
       deal: { groups: data.deal.groups.filter(function (g) { return deal[g.id]; }) },
       send: { groups: (data.send ? data.send.groups : []).filter(function (g) { return send[g.id]; }) },
+      buff: { groups: (data.buff ? data.buff.groups : []).filter(function (g) { return buff[g.id]; }) },
       combo: plan,
     };
   }

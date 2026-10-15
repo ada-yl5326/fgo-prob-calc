@@ -54,7 +54,8 @@
       if (!(weight > 0)) throw new Error(name + '的被攻击权重要大于 0');
       return { role: s.role, mortal: mortal, hps: [hp].concat(guts), inv: inv, taunt: !!s.taunt, weight: weight };
     });
-    if (!servants.some(function (s) { return s.role === 'must'; })) throw new Error('至少要有一名「要退场」的从者');
+    // 只有「不能退场」时算的是「指定的从者都没退场」的概率
+    if (!servants.some(function (s) { return s.role === 'must' || s.role === 'keep'; })) throw new Error('至少要有一名「要退场」或「不能退场」的从者');
     var enemies = es.map(function (e, j) {
       var name = '敌人 ' + (j + 1);
       var n = Math.round(num(e.actions, 1, MAX_ACTIONS, name + '的行动次数'));
