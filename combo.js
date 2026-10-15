@@ -24,40 +24,79 @@
  *         没分条件的回合用原来的伤害组。
  *     「其他」那格没放伤害组 = 没满足条件就失败（v_其他 = 0）；条件格没放伤害组 = 这一回合不需要击破（100%）。
  *     几种条件只在同一个回合有差别时这样算是精确的；在不同回合都有差别时，相当于「看到后面的牌再决定按哪种打」，结果略偏高。
+ *
+ * 送人组（敌方行动阶段，规则见《送人概率规则.md》第 8 节）：
+ *     每个回合 = 我方行动阶段（伤害组、发牌组）+ 敌方行动阶段（送人组）。SL 或换打法时两个阶段的随机数一起重新抽，所以按每一次尝试算：
+ *         一种打法 = 伤害组 + 送人组；每次尝试的成功率 = 伤害组的击破率（不含 SL）× 送人组的成功率（不含 SL）
+ *         尝试次数 = 伤害组的 SL 次数 + 1（没放伤害组时 = 送人组的 SL 次数 + 1）
+ *         这一回合 = 1 − Π (1 − 每次尝试的成功率)
+ *     默认一个回合一个送人组；分了条件的回合，每个条件格、「其他」格可以另放送人组（空着 = 跟随回合的送人组）。
+ *     伤害组和送人组都相同的格子算同一种打法，只算一次。没放送人组的回合和以前完全一样。送人组不影响洗牌的计算。
  */
 (function (root) {
   'use strict';
 
   var MAX_TURNS = 20;
 
+  /** SL n 次后 = 1 − (1 − p)^(n+1)（与 killprob.js 的 withSL 相同） */
+  function withSL(p, sl) {
+    if (p <= 0 || p >= 1 || !sl) return p;
+    return -Math.expm1((sl + 1) * Math.log1p(-p));
+  }
+
+  /**
+   * 一种打法（伤害组 k + 送人组 s，都可以没有）的成功率，已含 SL：
+   * 没有送人组 = 伤害组的击破率（已含 SL）；没有伤害组 = 送人组 SL 后的成功率；
+   * 都有 = 每次尝试 k.single × s.rate，尝试 k.sl + 1 次（伤害组没给 single 时把 rate 当作单次、不 SL）
+   */
+  function attempt(k, s) {
+    if (!s) return k ? k.rate : 1;
+    if (!k) return withSL(s.rate, s.sl || 0);
+    var plain = k.single === undefined;
+    return withSL((plain ? k.rate : k.single) * s.rate, plain ? 0 : k.sl || 0);
+  }
+
   /**
    * plan:  { turns, kill: [伤害组 id | null] × turns, deal: [{ at: 从第几回合开始（0 起）, id }],
-   *          split: [null | { alts: [伤害组 id | null] × 条件数, other: 伤害组 id | null }] × turns（可省略） }
-   * kill(id) → { name, rate: SL 后的击破率 | null（没输入完整） }
+   *          split: [null | { alts: [伤害组 id | null] × 条件数, other: 伤害组 id | null,
+   *                           sends: [送人组 id | null（跟随回合）] × 条件数, sendOther: 送人组 id | null }] × turns（可省略）,
+   *          send: [送人组 id | null] × turns（可省略） }
+   * kill(id) → { name, rate: SL 后的击破率 | null（没输入完整）, single: 不含 SL 的击破率, sl: SL 次数 }（single、sl 可省略）
+   * send(id) → { name, rate: 不含 SL 的送人成功率 | null, sl: SL 次数, pending: 还在计算 }（没有送人组时可以不传 send）
    * deal(id) → { name, rate: 发牌概率 | null（条件有误）, span: 占几个回合, servants: 场上人数,
    *              alts: 条件数, exact: 恰好满足各条件集合的组合数（deal.js 的 exactCounts） }
    * 返回 {
    *   turns, value: 综合击破率 | null, problems: [说明],
    *   placements: [{ at, end, id, name, rate, span, servants, shown: 实际显示占几格, reshuffle: 'first' | 'natural' | 'forced', conflict: null | 文字 }],
    *   cover: 每回合被哪个发牌组占用（placements 的序号，-1 = 没有）,
-   *   kills: 每回合 { id, name, rate } | null,
+   *   kills: 每回合 { id, name, rate } | null, sends: 每回合的送人组 { id, name, rate, sl } | null,
    *   splits: 每回合实际生效的分条件 { alts: [{ id, name, rate } | null], other: { id, name, rate } | null } | null（不在发牌组里的回合不生效）,
    *   blocks: 公式按洗牌分组 [{ from, to, placement: 序号 | -1, factors: [{ kind, turn, name, rate }] }]；
+   *           kind = 'kill' 击破 / 'send' 只有送人 / 'turn' 击破 + 送人（带 kill、send）/ 'deal' 发牌；
    *           分了条件的一轮只有一个 kind = 'mix' 的因子，带 to、total、
-   *           regions: [{ set: 恰好满足的条件, count, value } | { other: true, count, value }],
+   *           regions: [{ set: 恰好满足的条件, count, value, turns } | { other: true, count, value, turns }]（turns 见 mixFactor 的 log）,
    *   factors: 全部不是 100% 的因子（按回合顺序），weakest: 最小的那个
    * }
    */
-  function evaluate(plan, kill, deal) {
+  function evaluate(plan, kill, deal, send) {
     var n = plan.turns, problems = [];
     var kills = [];
     for (var t = 0; t < n; t++) {
       var id = plan.kill[t];
       if (!id) { kills.push(null); continue; }
       var k = kill(id);
-      kills.push({ id: id, name: k.name, rate: k.rate });
+      kills.push({ id: id, name: k.name, rate: k.rate, single: k.single, sl: k.sl });
       if (k.rate === null) problems.push('T' + (t + 1) + ' 的「' + k.name + '」还没输入完整');
     }
+    /** 送人组的信息；没输入完整、还在计算时记下问题 */
+    var sendInfo = function (sid, where) {
+      if (!sid || !send) return null;
+      var x = send(sid);
+      if (x.rate === null) problems.push(where + '的送人组「' + x.name + '」' + (x.pending ? '还在计算' : '还没输入完整'));
+      return { id: sid, name: x.name, rate: x.rate, sl: x.sl || 0 };
+    };
+    var sends = [];
+    for (t = 0; t < n; t++) sends.push(sendInfo(plan.send && plan.send[t], 'T' + (t + 1) + ' '));
 
     var placements = plan.deal.map(function (p) {
       var d = deal(p.id);
@@ -91,11 +130,14 @@
         if (!gid) return null;
         var g = kill(gid);
         if (g.rate === null) problems.push('T' + (t + 1) + ' ' + label + '的「' + g.name + '」还没输入完整');
-        return { id: gid, name: g.name, rate: g.rate };
+        return { id: gid, name: g.name, rate: g.rate, single: g.single, sl: g.sl };
       };
-      var alts = [];
-      for (var a = 0; a < (owner.alts || 1); a++) alts.push(info(sp.alts && sp.alts[a], '条件 ' + (a + 1)));
-      splits.push({ alts: alts, other: info(sp.other, '其他情况') });
+      var alts = [], altSends = [];
+      for (var a = 0; a < (owner.alts || 1); a++) {
+        alts.push(info(sp.alts && sp.alts[a], '条件 ' + (a + 1)));
+        altSends.push(sendInfo(sp.sends && sp.sends[a], 'T' + (t + 1) + ' 条件 ' + (a + 1)));
+      }
+      splits.push({ alts: alts, other: info(sp.other, '其他情况'), sends: altSends, sendOther: sendInfo(sp.sendOther, 'T' + (t + 1) + ' 其他情况') });
     }
 
     var blocks = [], factors = [];
@@ -105,10 +147,11 @@
       var mixed = false;
       for (var v = t; v <= to; v++) if (splits[v]) mixed = true;
       if (mixed) {
-        f.push(mixFactor(p, t, to, kills, splits));
+        f.push(mixFactor(p, t, to, kills, splits, sends));
       } else {
         for (v = t; v <= to; v++) {
-          if (kills[v] && kills[v].rate !== 1) f.push({ kind: 'kill', turn: v, name: kills[v].name, rate: kills[v].rate });
+          var tf = turnFactor(v, kills[v], sends[v]);
+          if (tf) f.push(tf);
         }
         if (p && p.rate !== 1) f.push({ kind: 'deal', turn: p.at, to: p.end, name: p.name, rate: p.rate });
       }
@@ -122,45 +165,82 @@
     if (!problems.length) value = factors.reduce(function (acc, f) { return acc * f.rate; }, 1);
     var weakest = null;
     factors.forEach(function (f) { if (f.rate !== null && (!weakest || f.rate < weakest.rate)) weakest = f; });
-    return { turns: n, value: value, problems: problems, placements: placements, cover: cover, kills: kills, splits: splits,
+    return { turns: n, value: value, problems: problems, placements: placements, cover: cover, kills: kills, sends: sends, splits: splits,
       blocks: blocks, factors: factors, weakest: weakest };
   }
 
+  /** 没分条件的回合：击破 / 送人 / 击破 + 送人 的因子（100% 时返回 null，不列出） */
+  function turnFactor(v, k, s) {
+    if (!s) return k && k.rate !== 1 ? { kind: 'kill', turn: v, name: k.name, rate: k.rate, kill: k } : null;
+    var rate = (k && k.rate === null) || s.rate === null ? null : attempt(k, s);
+    if (rate === 1) return null;
+    if (!k) return { kind: 'send', turn: v, name: s.name, rate: rate, send: s };
+    return { kind: 'turn', turn: v, name: k.name + ' + ' + s.name, rate: rate, kill: k, send: s };
+  }
+
   /** 分了条件的一轮洗牌（第 from ~ to 回合，发牌组 p）：按「恰好满足哪几种条件」分组后加权求和 */
-  function mixFactor(p, from, to, kills, splits) {
+  function mixFactor(p, from, to, kills, splits, sends) {
     var ok = p.rate !== null && !!p.exact, t;
-    var rateOf = function (x) { if (x && x.rate === null) ok = false; return x ? x.rate : 1; };
+    /** 一种打法（伤害组 k + 送人组 s）的成功率，已含 SL */
+    var rateOf = function (k, s) {
+      if ((k && k.rate === null) || (s && s.rate === null)) { ok = false; return 1; }
+      return attempt(k, s);
+    };
     var f = { kind: 'mix', turn: from, to: to, name: p.name, rate: null, regions: [], total: null };
     if (!ok) return f;
-    /** 满足 set 里这几种条件时的击破率：分了条件的回合，各条件格的伤害组各打一次（SL 换打法） */
-    var valueOf = function (set) {
+    /** 一种打法：{ kill, send, rate }（计算过程用） */
+    var play = function (g, s) { return { kill: g || null, send: s || null, rate: rateOf(g, s) }; };
+    /**
+     * 满足 set 里这几种条件时的成功率：分了条件的回合，各条件格的打法（伤害组 + 送人组）各打一次（SL 换打法）；
+     * 伤害组、送人组都相同的格子只算一次；伤害组空着 = 不需要击破（没有送人组时这一回合就是 100%）。
+     * log：每个回合的打法和成功率 [{ turn, split, plays: [{ kill, send, rate, alts: 用这种打法的条件 }], rate }]
+     */
+    var valueOf = function (set, log) {
       var v = 1;
       for (t = from; t <= to; t++) {
-        if (!splits[t]) { v *= rateOf(kills[t]); continue; }
-        var miss = 1, seen = {};
+        if (!splits[t]) {
+          var pl = play(kills[t], sends[t]);
+          v *= pl.rate;
+          log.push({ turn: t, split: false, plays: [pl], rate: pl.rate });
+          continue;
+        }
+        var miss = 1, seen = {}, plays = [];
         set.forEach(function (k) {
-          var g = splits[t].alts[k];
-          if (!g) miss = 0;                                  // 空格 = 这一回合不需要击破
-          else if (!seen[g.id]) { seen[g.id] = true; miss *= 1 - rateOf(g); }
+          var g = splits[t].alts[k], s = splits[t].sends[k] || sends[t];
+          var key = (g ? g.id : '') + '|' + (s ? s.id : '');
+          if (seen[key]) { seen[key].alts.push(k); return; }
+          var x = play(g, s);
+          x.alts = [k];
+          seen[key] = x;
+          plays.push(x);
+          miss *= 1 - x.rate;
         });
         v *= 1 - miss;
+        log.push({ turn: t, split: true, plays: plays, rate: 1 - miss });
       }
       return v;
     };
-    var other = 1;
-    for (t = from; t <= to; t++) other *= splits[t] ? (splits[t].other ? rateOf(splits[t].other) : 0) : rateOf(kills[t]);
+    var other = 1, otherLog = [];
+    for (t = from; t <= to; t++) {
+      var op;
+      if (!splits[t]) op = play(kills[t], sends[t]);
+      else if (splits[t].other) op = play(splits[t].other, splits[t].sendOther || sends[t]);
+      else op = { kill: null, send: null, rate: 0, fail: true };   // 其他格没放伤害组 = 失败
+      other *= op.rate;
+      otherLog.push({ turn: t, split: !!splits[t], plays: [op], rate: op.rate });
+    }
     var sum = 0, total = p.exact[0];
     for (var m = 1; m < p.exact.length; m++) {
       var c = p.exact[m], set = [];
       total += c;
       if (!c) continue;
       for (var k = 0; (1 << k) <= m; k++) if ((m >> k) & 1) set.push(k);
-      var value = valueOf(set);
-      f.regions.push({ set: set, count: c, value: value });
+      var log = [], value = valueOf(set, log);
+      f.regions.push({ set: set, count: c, value: value, turns: log });
       sum += c * value;
     }
     if (!ok) { f.regions = []; return f; }
-    f.regions.push({ other: true, count: p.exact[0], value: other });
+    f.regions.push({ other: true, count: p.exact[0], value: other, turns: otherLog });
     sum += p.exact[0] * other;
     f.total = total;
     f.rate = sum / total;
@@ -182,10 +262,15 @@
   }
 
   function ensureTurns(plan, n) {
-    while (plan.turns < n) { plan.turns++; plan.kill.push(null); if (plan.split) plan.split.push(null); }
+    while (plan.turns < n) {
+      plan.turns++;
+      plan.kill.push(null);
+      if (plan.split) plan.split.push(null);
+      if (plan.send) plan.send.push(null);
+    }
   }
 
-  var api = { MAX_TURNS: MAX_TURNS, evaluate: evaluate, placeDeal: placeDeal, ensureTurns: ensureTurns };
+  var api = { MAX_TURNS: MAX_TURNS, evaluate: evaluate, placeDeal: placeDeal, ensureTurns: ensureTurns, attempt: attempt, withSL: withSL };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.Combo = api;
 })(typeof self !== 'undefined' ? self : this);

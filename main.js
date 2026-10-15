@@ -1,10 +1,10 @@
-// 页签切换（击破概率 / 发牌概率 / 综合击破概率）和离线缓存注册；最后加载，其他页面脚本监听 tabshow 事件
+// 页签切换（击破概率 / 发牌概率 / 送人概率 / 综合击破概率）和离线缓存注册；最后加载，其他页面脚本监听 tabshow 事件
 (function () {
   'use strict';
 
   const $ = (id) => document.getElementById(id);
   const TAB_KEY = 'killprob.tab.v1';
-  const views = { kill: $('viewKill'), deal: $('viewDeal'), combo: $('viewCombo') };
+  const views = { kill: $('viewKill'), deal: $('viewDeal'), send: $('viewSend'), combo: $('viewCombo') };
 
   function showTab(name, remember) {
     if (!views[name]) name = 'kill';

@@ -1,4 +1,4 @@
-// 工作目录：左上角按钮打开侧边栏。每个工作目录 = 一整套伤害组、发牌组和综合页的方案。
+// 工作目录：左上角按钮打开侧边栏。每个工作目录 = 一整套伤害组、发牌组、送人组和综合页的方案。
 // 页面上正在编辑的内容照旧随时自动保留（刷新也在）；「保存」把它存进当前工作目录，和上次保存的不一样时显示「未保存」。
 // 切换 / 新建 / 作为新的工作目录导入前，有未保存的修改会先询问。导出：文件、分享码、分享链接（share.js）、二维码（qr.js）。
 // 切换时把目标内容写进各页面的存储，再刷新页面，由各页面按平时的方式读取和检查。
@@ -6,10 +6,10 @@
   'use strict';
 
   const G = window.Groups, S = window.Share;
-  const Kill = window.KillApp, Deal = window.DealApp, Combo = window.ComboApp;
+  const Kill = window.KillApp, Deal = window.DealApp, Send = window.SendApp, Combo = window.ComboApp;
   const KEY = 'killprob.workspaces.v1';
   const SYNC = 'killprob.workspaces.sync';               // 刷新后把当前工作目录的记录换成页面检查过的内容
-  const LIVE = { kill: 'killprob.kill.v2', deal: 'killprob.deal.v2', combo: 'killprob.combo.v1' };
+  const LIVE = { kill: 'killprob.kill.v2', deal: 'killprob.deal.v2', send: 'killprob.send.v1', combo: 'killprob.combo.v1' };
   const MAX_ITEMS = 100;
   const $ = (id) => document.getElementById(id);
   const esc = G.escapeHtml;
@@ -44,14 +44,18 @@
 
   /** 页面上正在编辑的内容 */
   function live() {
-    return { kill: { groups: clone(Kill.store.list()) }, deal: { groups: clone(Deal.store.list()) }, combo: Combo.snapshot() };
+    return { kill: { groups: clone(Kill.store.list()) }, deal: { groups: clone(Deal.store.list()) }, send: { groups: clone(Send.store.list()) },
+      combo: Combo.snapshot() };
   }
 
   /** 新的空白工作目录 */
   function blank() {
     const one = (store) => ({ groups: [{ id: store.opts.idPrefix + '1', name: store.opts.naming(1), data: store.opts.create() }] });
-    return { kill: one(Kill.store), deal: one(Deal.store), combo: { turns: 3, kill: [null, null, null], deal: [], split: [null, null, null] } };
+    return { kill: one(Kill.store), deal: one(Deal.store), send: one(Send.store), combo: { turns: 3, kill: [null, null, null], deal: [], split: [null, null, null] } };
   }
+
+  /** 比较用：v0.8 以前保存的工作目录没有送人组，当作只有一个空白的送人组；各项按固定顺序排列 */
+  const canon = (d) => ({ kill: d.kill, deal: d.deal, send: d.send || blank().send, combo: d.combo });
 
   /** 和新的空白工作目录一样（没有任何输入）；第一次打开网页时发牌页自带的示例（BBAAQ 第 1 回合要 BB）也算空白 */
   function isBlank(d) {
@@ -59,14 +63,14 @@
     const empty = (x, store) => only(x, store.opts.create()) ||
       (store === Deal.store && localStorage.getItem('killprob.deal.v1') === null && only(x, store.opts.legacy()));
     const c = d.combo || {};
-    return empty(d.kill, Kill.store) && empty(d.deal, Deal.store) &&
-      !(c.kill || []).some(Boolean) && !(c.deal || []).length && !(c.split || []).some(Boolean);
+    return empty(d.kill, Kill.store) && empty(d.deal, Deal.store) && (!d.send || empty(d.send, Send.store)) &&
+      !(c.kill || []).some(Boolean) && !(c.deal || []).length && !(c.split || []).some(Boolean) && !(c.send || []).some(Boolean);
   }
 
   /** 有没有未保存的修改 */
   function dirty() {
     const it = currentItem(), d = live();
-    return it ? JSON.stringify(it.data) !== JSON.stringify(d) : !isBlank(d);
+    return it ? JSON.stringify(canon(it.data)) !== JSON.stringify(canon(d)) : !isBlank(d);
   }
 
   // ---------- 保存、切换、新建 ----------
@@ -76,6 +80,7 @@
     try {
       localStorage.setItem(LIVE.kill, JSON.stringify({ active: null, groups: data.kill.groups }));
       localStorage.setItem(LIVE.deal, JSON.stringify({ active: null, groups: data.deal.groups }));
+      localStorage.setItem(LIVE.send, JSON.stringify({ active: null, groups: (data.send || blank().send).groups }));
       if (data.combo) localStorage.setItem(LIVE.combo, JSON.stringify(data.combo));
       else localStorage.removeItem(LIVE.combo);
     } catch (e) {
@@ -115,7 +120,7 @@
     it.data = live();
     it.savedAt = Date.now();
     const c = it.data.combo || {};                     // 方案里放了组时才记下综合击破率
-    it.rate = (c.kill || []).some(Boolean) || (c.deal || []).length || (c.split || []).some(Boolean) ? Combo.value() : null;
+    it.rate = (c.kill || []).some(Boolean) || (c.deal || []).length || (c.split || []).some(Boolean) || (c.send || []).some(Boolean) ? Combo.value() : null;
     ws.current = it.id;
     const ok = saveWs();
     render();
@@ -267,8 +272,9 @@
 
   function summaryOf(data) {
     const c = data.combo || {};
-    const used = (c.kill || []).filter(Boolean).length + (c.deal || []).length + (c.split || []).filter(Boolean).length;
-    return '伤害组 ' + data.kill.groups.length + ' 个、发牌组 ' + data.deal.groups.length + ' 个、综合方案' + (used ? '已放好' : '为空');
+    const used = (c.kill || []).filter(Boolean).length + (c.deal || []).length + (c.split || []).filter(Boolean).length + (c.send || []).filter(Boolean).length;
+    return '伤害组 ' + data.kill.groups.length + ' 个、发牌组 ' + data.deal.groups.length + ' 个、送人组 ' + data.send.groups.length + ' 个、综合方案' +
+      (used ? '已放好' : '为空');
   }
 
   /**
@@ -324,8 +330,9 @@
       return;
     }
     const clean = (groups, store) => groups.filter((g) => g && store.opts.clean(g.data));
-    const data = { kill: { groups: clean(got.data.kill.groups, Kill.store) }, deal: { groups: clean(got.data.deal.groups, Deal.store) }, combo: got.data.combo };
-    if (!data.kill.groups.length && !data.deal.groups.length) {
+    const data = { kill: { groups: clean(got.data.kill.groups, Kill.store) }, deal: { groups: clean(got.data.deal.groups, Deal.store) },
+      send: { groups: clean((got.data.send || { groups: [] }).groups, Send.store) }, combo: got.data.combo };
+    if (!data.kill.groups.length && !data.deal.groups.length && !data.send.groups.length) {
       await G.confirmBox('「' + got.name + '」里没有可以导入的组。', { ok: '知道了' });
       return;
     }
@@ -343,6 +350,7 @@
       }
       if (!data.kill.groups.length) data.kill = blank().kill;
       if (!data.deal.groups.length) data.deal = blank().deal;
+      if (!data.send.groups.length) data.send = blank().send;
       const it = { id: newId(), name: S.uniqueName(got.name, taken()), savedAt: Date.now(), rate: null, data };
       ws.items.unshift(it);
       apply(data, it.id);
@@ -360,7 +368,8 @@
     });
     add(data.kill.groups, Kill.store);
     add(data.deal.groups, Deal.store);
-    message = '已合并：伤害组 ' + data.kill.groups.length + ' 个、发牌组 ' + data.deal.groups.length + ' 个（还没保存）';
+    add(data.send.groups, Send.store);
+    message = '已合并：伤害组 ' + data.kill.groups.length + ' 个、发牌组 ' + data.deal.groups.length + ' 个、送人组 ' + data.send.groups.length + ' 个（还没保存）';
     render();
   }
 
@@ -394,8 +403,9 @@
     html += '<div class="ws-list-title">全部工作目录（' + ws.items.length + '）</div>';
     if (!ws.items.length) html += '<div class="ws-empty">还没有保存过工作目录。点上面的「保存」，把当前内容存成第一个。</div>';
     html += '<ul class="ws-list">' + ws.items.map((x) => {
-      const d = x.data || {}, k = ((d.kill || {}).groups || []).length, g = ((d.deal || {}).groups || []).length;
-      const sub = timeText(x.savedAt) + ' · 伤害组 ' + k + ' · 发牌组 ' + g + (x.rate !== null && x.rate !== undefined ? ' · 综合 ' + pct(x.rate) : '');
+      const d = x.data || {}, k = ((d.kill || {}).groups || []).length, g = ((d.deal || {}).groups || []).length, sd = ((d.send || {}).groups || []).length;
+      const sub = timeText(x.savedAt) + ' · 伤害组 ' + k + ' · 发牌组 ' + g + (sd ? ' · 送人组 ' + sd : '') +
+        (x.rate !== null && x.rate !== undefined ? ' · 综合 ' + pct(x.rate) : '');
       return '<li class="ws-item' + (x.id === ws.current ? ' on' : '') + '">' +
         '<button type="button" class="ws-open" data-open="' + x.id + '"><span class="ws-name">' + esc(x.name) + (x.id === ws.current ? '<em>当前</em>' : '') +
         '</span><small>' + esc(sub) + '</small></button>' +
@@ -460,6 +470,7 @@
   const changed = () => { clearTimeout(dotTimer); dotTimer = setTimeout(render, 150); };
   Kill.store.onChange(changed);
   Deal.store.onChange(changed);
+  Send.store.onChange(changed);
   document.addEventListener('combochange', changed);
 
   // 刚切换过来：把记录换成页面检查过的内容（例如引用了不存在的组的部分已经去掉），这样刚打开时不会显示「未保存」

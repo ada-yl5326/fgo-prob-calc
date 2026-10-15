@@ -1,11 +1,12 @@
-// 综合击破概率页面：把伤害组、发牌组拖进各个回合（或先点组、再点回合），算出整个方案的综合击破率
+// 综合击破概率页面：把伤害组、发牌组、送人组拖进各个回合（或先点组、再点回合），算出整个方案的综合击破率。
+// 每个回合 = 我方行动阶段（发牌、击破）+ 敌方行动阶段（送人）
 (function () {
   'use strict';
 
   const C = window.Combo;
   const DealCore = window.Deal;
   const G = window.Groups;
-  const Kill = window.KillApp, Deal = window.DealApp;
+  const Kill = window.KillApp, Deal = window.DealApp, Send = window.SendApp;
   const STORAGE_KEY = 'killprob.combo.v1';
   const $ = (id) => document.getElementById(id);
   const esc = G.escapeHtml;
@@ -14,8 +15,10 @@
 
   // ---------- 方案 ----------
 
-  // split[t]：第 t 回合按条件分配伤害 { alts: [伤害组 id | null] × 条件数, other: 伤害组 id | null }，不分条件时为 null
-  let plan = { turns: 3, kill: [null, null, null], deal: [], split: [null, null, null] };
+  // split[t]：第 t 回合按条件分配 { alts: [伤害组 id | null] × 条件数, other: 伤害组 id | null,
+  //                                 sends: [送人组 id | null（跟随回合）] × 条件数, sendOther: 送人组 id | null }，不分条件时为 null
+  // send[t]：第 t 回合敌方行动阶段的送人组
+  let plan = { turns: 3, kill: [null, null, null], deal: [], split: [null, null, null], send: [null, null, null] };
   let notice = '';                                       // 一次性的提示（例如引用的组被删除了）
 
   function load() {
@@ -34,8 +37,11 @@
           const sp = Array.isArray(s.split) ? s.split[t] : null;
           if (!sp || typeof sp !== 'object' || !Array.isArray(sp.alts)) return null;
           const id = (x) => (typeof x === 'string' ? x : null);
-          return { alts: sp.alts.slice(0, 5).map(id), other: id(sp.other) };
+          const alts = sp.alts.slice(0, 5).map(id);
+          const sends = alts.map((_, a) => id(Array.isArray(sp.sends) ? sp.sends[a] : null));
+          return { alts, other: id(sp.other), sends, sendOther: id(sp.sendOther) };
         }),
+        send: Array.from({ length: n }, (_, t) => (Array.isArray(s.send) && typeof s.send[t] === 'string' ? s.send[t] : null)),
       };
     } catch (e) { /* 忽略 */ }
   }
@@ -65,6 +71,13 @@
       sp.alts = sp.alts.map((id) => { if (gone(id)) { removed++; return null; } return id; });
       if (gone(sp.other)) { removed++; sp.other = null; }
     });
+    const sendGone = (id) => id && !Send.store.get(id);
+    plan.send = plan.send.map((id) => { if (sendGone(id)) { removed++; return null; } return id; });
+    plan.split.forEach((sp) => {
+      if (!sp) return;
+      sp.sends = sp.sends.map((id) => { if (sendGone(id)) { removed++; return null; } return id; });
+      if (sendGone(sp.sendOther)) { removed++; sp.sendOther = null; }
+    });
     const before = plan.deal.length;
     plan.deal = plan.deal.filter((p) => Deal.store.get(p.id));
     removed += before - plan.deal.length;
@@ -72,8 +85,15 @@
   }
 
   function killInfo(id) {
-    const g = Kill.store.get(id), r = Kill.evaluate(g.data);
-    return { name: g.name, rate: r.status === 'ok' ? r.final : null, sl: r.status === 'ok' ? r.sl : 0 };
+    const g = Kill.store.get(id), r = Kill.evaluate(g.data), ok = r.status === 'ok';
+    return { name: g.name, rate: ok ? r.final : null, single: ok ? r.single : null, sl: ok ? r.sl : 0 };
+  }
+
+  /** 送人组：rate = 不含 SL 的成功率（还在后台计算时为 null，算完后重画） */
+  function sendInfo(id) {
+    const g = Send.store.get(id), r = Send.resultFor(g.data);
+    if (r.status === 'ok') return { name: g.name, rate: r.single, sl: r.sl, final: r.final };
+    return { name: g.name, rate: null, sl: 0, pending: r.status === 'pending' };
   }
 
   function dealInfo(id) {
@@ -90,6 +110,10 @@
   const spanOf = (id) => dealInfo(id).span;
 
   function usage(kind, id) {
+    if (kind === 'send') {
+      const inSplit = plan.split.reduce((s, sp) => s + (sp ? sp.sends.filter((x) => x === id).length + (sp.sendOther === id ? 1 : 0) : 0), 0);
+      return plan.send.filter((x) => x === id).length + inSplit;
+    }
     if (kind !== 'kill') return plan.deal.filter((p) => p.id === id).length;
     const inSplit = plan.split.reduce((s, sp) => s + (sp ? sp.alts.filter((x) => x === id).length + (sp.other === id ? 1 : 0) : 0), 0);
     return plan.kill.filter((x) => x === id).length + inSplit;
@@ -111,17 +135,28 @@
       }
       const n = r.placements[r.cover[t]].alts;
       if (sp.alts.length > n) {
-        if (sp.alts.slice(n).some(Boolean)) msgs.push('T' + (t + 1) + ' 的发牌组现在只有 ' + n + ' 种条件，多出来的条件格已去掉');
+        if (sp.alts.slice(n).some(Boolean) || sp.sends.slice(n).some(Boolean)) msgs.push('T' + (t + 1) + ' 的发牌组现在只有 ' + n + ' 种条件，多出来的条件格已去掉');
         sp.alts = sp.alts.slice(0, n);
+        sp.sends = sp.sends.slice(0, n);
       }
       while (sp.alts.length < n) sp.alts.push(null);
+      while (sp.sends.length < n) sp.sends.push(null);
     });
     return msgs.join('；');
   }
 
   // 工作目录用：当前方案的副本、当前方案的综合击破率（没有结果时为 null）
-  const snapshot = () => JSON.parse(JSON.stringify(plan));
-  const value = () => { try { prune(); return C.evaluate(plan, killInfo, dealInfo).value; } catch (e) { return null; } };
+  // 没放任何送人格时写成和 v0.8 一样（以前保存的工作目录不会因为升级被当成有修改）
+  const snapshot = () => {
+    const p = JSON.parse(JSON.stringify(plan));
+    if (!p.send.some(Boolean)) delete p.send;
+    p.split.forEach((sp) => {
+      if (sp && !sp.sends.some(Boolean) && !sp.sendOther) { delete sp.sends; delete sp.sendOther; }
+    });
+    return p;
+  };
+  const evaluate = () => C.evaluate(plan, killInfo, dealInfo, sendInfo);
+  const value = () => { try { prune(); return evaluate().value; } catch (e) { return null; } };
 
   window.ComboApp = { usage, snapshot, value };
 
@@ -131,8 +166,17 @@
 
   function factorLabel(f) {
     if (f.kind === 'deal') return rangeText(f.turn, f.to) + ' 发牌';
-    if (f.kind === 'mix') return rangeText(f.turn, f.to) + ' 按条件分配伤害';
+    if (f.kind === 'mix') return rangeText(f.turn, f.to) + ' 按条件分配';
+    if (f.kind === 'send') return 'T' + (f.turn + 1) + ' 送人';
+    if (f.kind === 'turn') return 'T' + (f.turn + 1) + ' 击破 + 送人';
     return 'T' + (f.turn + 1) + ' 击破';
+  }
+
+  /** 击破 + 送人的回合：每次尝试 = 击破 × 送人（都不含 SL），按伤害组的 SL 次数重来 */
+  function turnDetail(f) {
+    const k = f.kill, s = f.send, one = k.single * s.rate;
+    return '<li class="mix-detail"><div>每次尝试 = 击破 ' + short(k.single) + ' × 送人 ' + short(s.rate) + ' = ' + short(one) +
+      (k.sl ? '，SL ' + k.sl + ' 次（按伤害组的 SL）' : '') + '</div></li>';
   }
 
   /** 按条件分配伤害的一轮：按「恰好满足哪几种条件」分组 */
@@ -153,13 +197,13 @@
   }
 
   function renderResult(r) {
-    const used = plan.kill.some(Boolean) || plan.deal.length;
+    const used = plan.kill.some(Boolean) || plan.deal.length || plan.send.some(Boolean) || plan.split.some(Boolean);
     const value = $('comboProb');
     if (!used) {
       value.textContent = '—';
       value.classList.add('idle');
       $('comboMeter').style.width = '0';
-      $('comboNote').innerHTML = '<div>把伤害组、发牌组放进下面的回合里</div>';
+      $('comboNote').innerHTML = '<div>把伤害组、发牌组、送人组放进下面的回合里</div>';
       return;
     }
     let html = '';
@@ -188,9 +232,78 @@
     if (r.factors.length) {
       html += '<ul class="combo-factors">' + r.factors.map((f) => '<li' + (f === r.weakest && r.factors.length > 1 ? ' class="weak"' : '') + '><span>' +
         factorLabel(f) + ' · ' + esc(f.name) + '</span><b>' + (f.rate === null ? '—' : short(f.rate)) + '</b></li>' +
-        (f.kind === 'mix' ? mixDetail(f) : '')).join('') + '</ul>';
+        (f.kind === 'mix' ? mixDetail(f) : f.kind === 'turn' && f.rate !== null ? turnDetail(f) : '')).join('') + '</ul>';
     }
     $('comboNote').innerHTML = html;
+  }
+
+  // ---------- 计算过程 ----------
+
+  const P = Kill.formatPct;                              // 计算过程里的数都保留 4 位小数，方便核对
+  const quote = (name) => '「' + esc(name) + '」';
+
+  /** 伤害组：击破率（有 SL 时写出单次和 SL 次数） */
+  function killText(k) {
+    const single = k.single === undefined || k.single === null ? k.rate : k.single;
+    return quote(k.name) + '击破 ' + (k.sl ? '单次 ' + P(single) + '，SL ' + k.sl + ' 次 → 1 − (1 − ' + P(single) + ')^' + (k.sl + 1) + ' = ' + P(k.rate) : P(k.rate));
+  }
+
+  /** 一种打法（伤害组 + 送人组）怎么算 */
+  function playText(pl) {
+    if (pl.fail) return '没放伤害组 = 失败，0%';
+    const k = pl.kill, s = pl.send;
+    if (!k && !s) return '不需要击破、不需要送人，100%';
+    if (!s) return killText(k);
+    if (!k) {
+      return quote(s.name) + '送人 ' + (s.sl ? '单次 ' + P(s.rate) + '，SL ' + s.sl + ' 次 → 1 − (1 − ' + P(s.rate) + ')^' + (s.sl + 1) + ' = ' + P(pl.rate) : P(s.rate));
+    }
+    const plain = k.single === undefined || k.single === null;
+    const single = plain ? k.rate : k.single, sl = plain ? 0 : k.sl || 0, one = single * s.rate;
+    return quote(k.name) + '击破 ' + P(single) + ' × ' + quote(s.name) + '送人 ' + P(s.rate) + ' = 每次 ' + P(one) +
+      (sl ? '；按伤害组的 SL ' + sl + ' 次重来 → 1 − (1 − ' + P(one) + ')^' + (sl + 1) + ' = ' + P(pl.rate) : '');
+  }
+
+  /** 按条件分配的一轮里，某一种情况下各回合怎么算 */
+  function regionTurns(x) {
+    return '<ul>' + x.turns.map((tt) => {
+      const head = 'T' + (tt.turn + 1) + '：';
+      if (!tt.split) return '<li>' + head + playText(tt.plays[0]) + '</li>';
+      if (x.other) return '<li>' + head + '其他格：' + playText(tt.plays[0]) + '</li>';
+      const lines = tt.plays.map((pl) => {
+        const who = '条件 ' + pl.alts.map((k) => k + 1).join('、') + (pl.alts.length > 1 ? '（打法相同，只算一次）' : '');
+        return '<div>' + who + '：' + playText(pl) + '</div>';
+      }).join('');
+      const combine = tt.plays.length > 1
+        ? '<div class="sum">各打一次（SL 换打法）：1 − ' + tt.plays.map((pl) => '(1 − ' + P(pl.rate) + ')').join('') + ' = ' + P(tt.rate) + '</div>' : '';
+      return '<li>' + head + lines + combine + '</li>';
+    }).join('') + '</ul>';
+  }
+
+  function factorSteps(f) {
+    const label = factorLabel(f);
+    if (f.rate === null) return '<li>' + label + quote(f.name) + '：还不能计算</li>';
+    if (f.kind === 'deal') return '<li>' + label + quote(f.name) + '：发牌概率 ' + P(f.rate) + '</li>';
+    if (f.kind === 'kill') return '<li>' + label + '：' + killText(f.kill) + '</li>';
+    if (f.kind === 'send') return '<li>' + label + '：' + playText({ send: f.send, rate: f.rate }) + '</li>';
+    if (f.kind === 'turn') return '<li>' + label + '：' + playText({ kill: f.kill, send: f.send, rate: f.rate }) + '</li>';
+    // 按条件分配：按「恰好满足哪几种条件」分成几种情况，各情况的成功率按发牌组合数加权
+    const rows = f.regions.filter((x) => x.count).map((x) => {
+      const what = x.other ? '一种条件都不满足（其他）' : (x.set.length === 1 ? '只满足条件 ' : '同时满足条件 ') + x.set.map((k) => k + 1).join('、');
+      return '<li>' + what + '：' + fmt(x.count) + ' 种，成功率 ' + P(x.value) + regionTurns(x) + '</li>';
+    }).join('');
+    const sum = f.regions.filter((x) => x.count).map((x) => fmt(x.count) + ' × ' + P(x.value)).join(' + ');
+    return '<li>' + label + quote(f.name) + '（发牌组共 ' + fmt(f.total) + ' 种发牌）<ol>' + rows + '</ol>' +
+      '<div class="sum">(' + sum + ') ÷ ' + fmt(f.total) + ' = ' + P(f.rate) + '</div></li>';
+  }
+
+  function renderSteps(r) {
+    const body = $('comboStepsBody');
+    if (r.value === null) { body.innerHTML = '<p>' + (r.problems.length ? '方案输入完整后显示计算过程。' : '') + '</p>'; return; }
+    if (!r.factors.length) { body.innerHTML = '<p>每个回合都是 100%（没放组，或者放的组都是 100%）。</p>'; return; }
+    body.innerHTML = '<p>按回合顺序，列出每一项（100% 的回合不列出）。每个回合 = 我方行动阶段 × 敌方行动阶段；同一回合既有伤害组又有送人组时，' +
+      'SL 或换打法会把两个阶段一起重来，所以按「每次尝试 = 击破 × 送人」计算。</p>' +
+      '<ol>' + r.factors.map(factorSteps).join('') + '</ol>' +
+      '<p class="sum">综合 = ' + (r.factors.length > 1 ? r.factors.map((f) => P(f.rate)).join(' × ') + ' = ' : '') + P(r.value) + '</p>';
   }
 
   function chip(kind, g, sub) {
@@ -199,11 +312,14 @@
       '<span>' + esc(g.name) + '</span><small>' + esc(sub) + '</small></button>';
   }
 
+  const COLUMN = { kill: '击破', deal: '发牌', send: '送人' };
+
   function renderPalette() {
     $('paletteKill').innerHTML = Kill.store.list().map((g) => chip('kill', g, Kill.summary(g))).join('');
     $('paletteDeal').innerHTML = Deal.store.list().map((g) => chip('deal', g, Deal.summary(g))).join('');
+    $('paletteSend').innerHTML = Send.store.list().map((g) => chip('send', g, Send.summary(g))).join('');
     $('paletteHint').textContent = selected
-      ? '已选中，点下面「' + (selected.kind === 'kill' ? '击破' : '发牌') + '」一栏的格子放入；再点一次取消'
+      ? '已选中，点下面「' + COLUMN[selected.kind] + '」一栏的格子放入；再点一次取消'
       : '拖到下面的回合里，或者先点一下组、再点一下回合';
   }
 
@@ -229,35 +345,69 @@
       '<button type="button" class="tl-remove" ' + remove + ' aria-label="移除">×</button></div>';
   }
 
-  /** 按条件分配伤害的击破格：条件 1 … n 和「其他」，每格放一个伤害组 */
+  /**
+   * 送人栏的一格（敌方行动阶段）。alt = 条件序号 / 'other'（分条件时；空着 = 跟随回合的送人组）。
+   * 放了伤害组的回合按伤害组的 SL 次数重来，送人组自己的 SL 不参与（hasKill 时提示）
+   */
+  function sendCell(s, t, alt, style, target, hasKill, follow) {
+    const altAttr = alt === undefined ? '' : ' data-alt="' + alt + '"';
+    const pos = style ? ' style="' + style + '"' : '';
+    if (!s) {
+      let empty = '不需要送人';
+      if (alt !== undefined) {                           // 条件格空着：用回合的送人组，写出实际用的是哪个
+        const f = follow && sendInfo(follow.id);
+        empty = !f ? '跟随回合<small>（不需要送人）</small>'
+          : '跟随回合<small>' + esc(f.name) + ' ' + (f.rate === null ? (f.pending ? '计算中' : '未完成') : short(f.final)) + '</small>';
+      }
+      return '<button type="button" class="tl-slot' + (target === 'send' ? ' target' : '') + '" data-slot="send" data-turn="' + t + '"' + altAttr + pos + '>' + empty + '</button>';
+    }
+    const info = sendInfo(s.id);
+    const remove = alt === undefined ? 'data-remove-send="' + t + '"' : 'data-remove-send="' + t + ':' + alt + '"';
+    const rate = info.rate === null ? (info.pending ? '计算中' : '未完成') : short(info.final);
+    const sub = info.rate === null || !info.sl ? '' : hasKill ? '按伤害组的 SL' : 'SL ' + info.sl + ' 次';
+    return '<div class="tl-item send' + (target === 'send' ? ' target' : '') + (info.rate === null && !info.pending ? ' bad' : '') + '" data-slot="send" data-turn="' + t + '"' + altAttr + pos + '>' +
+      '<span class="tl-grip" data-drag="send" data-id="' + s.id + '" data-from="' + t + '"' + (alt === undefined ? '' : ' data-from-alt="' + alt + '"') + ' aria-hidden="true">⠿</span>' +
+      '<div class="tl-body"><div class="tl-name">' + esc(info.name) + '</div><div class="tl-rate">' + rate + '</div>' +
+      (sub ? '<div class="tl-sub">' + sub + '</div>' : '') + '</div>' +
+      '<button type="button" class="tl-remove" ' + remove + ' aria-label="移除">×</button></div>';
+  }
+
+  /** 按条件分配：条件 1 … n 和「其他」，每格放一个伤害组（我方）和一个送人组（敌方，空着 = 跟随回合） */
   function splitCell(r, t, style, target) {
     const sp = r.splits[t], p = r.placements[r.cover[t]];
     const texts = Deal.altTexts(Deal.store.get(p.id).data);
-    let html = '<div class="tl-split" style="' + style + '"><div class="tl-split-head"><span>按条件分配伤害</span>' +
-      '<button type="button" class="tl-merge" data-merge="' + t + '">合并</button></div>';
-    sp.alts.forEach((k, a) => {
-      html += '<div class="tl-split-row"><div class="tl-split-label" title="' + esc(texts[a] || '') + '">条件 ' + (a + 1) +
-        '<span>' + esc(texts[a] || '') + '</span></div>' + killCell(k, t, a, '', target) + '</div>';
-    });
-    html += '<div class="tl-split-row"><div class="tl-split-label">其他<span>一种条件都不满足</span></div>' + killCell(sp.other, t, 'other', '', target) + '</div>';
+    let html = '<div class="tl-split" style="' + style + '"><div class="tl-split-head"><span>按条件分配</span>' +
+      '<button type="button" class="tl-merge" data-merge="' + t + '">合并</button></div>' +
+      '<div class="tl-split-row"><div class="tl-split-label">回合的送人组<span>条件格的送人空着时用它</span></div>' +
+      '<div class="tl-pair"><span></span>' + sendCell(r.sends[t], t, undefined, '', target, false) + '</div></div>';
+    const row = (label, sub, title, k, s, alt) => '<div class="tl-split-row"><div class="tl-split-label"' + (title ? ' title="' + esc(title) + '"' : '') + '>' + label +
+      '<span>' + esc(sub) + '</span></div><div class="tl-pair">' + killCell(k, t, alt, '', target) + sendCell(s, t, alt, '', target, !!k, r.sends[t]) + '</div></div>';
+    sp.alts.forEach((k, a) => { html += row('条件 ' + (a + 1), texts[a] || '', texts[a] || '', k, sp.sends[a], a); });
+    html += row('其他', '一种条件都不满足', '', sp.other, sp.sendOther, 'other');
     return html + '</div>';
   }
 
   function renderTimeline(r) {
-    const n = plan.turns, target = selected ? selected.kind : null;
-    let html = '<div class="tl-h">回合</div><div class="tl-h">发牌</div><div class="tl-h">击破</div>';
+    const n = plan.turns, target = selected ? selected.kind : null, R = 3;   // 前两行是表头
+    let html = '<div class="tl-phase" style="grid-row:1;grid-column:2 / span 2">我方行动阶段</div>' +
+      '<div class="tl-phase enemy" style="grid-row:1;grid-column:4">敌方行动阶段</div>' +
+      '<div class="tl-h" style="grid-row:2;grid-column:1">回合</div><div class="tl-h" style="grid-row:2;grid-column:2">发牌</div>' +
+      '<div class="tl-h" style="grid-row:2;grid-column:3">击破</div><div class="tl-h" style="grid-row:2;grid-column:4">送人</div>';
     for (let t = 0; t < n; t++) {
-      html += '<div class="tl-turn" style="grid-row:' + (t + 2) + '">T' + (t + 1) + '</div>';
+      html += '<div class="tl-turn" style="grid-row:' + (t + R) + '">T' + (t + 1) + '</div>';
       if (r.cover[t] < 0) {
         html += '<button type="button" class="tl-slot' + (target === 'deal' ? ' target' : '') + '" data-slot="deal" data-turn="' + t +
-          '" style="grid-row:' + (t + 2) + ';grid-column:2">不要求发牌</button>';
+          '" style="grid-row:' + (t + R) + ';grid-column:2">不要求发牌</button>';
       }
-      const cell = 'grid-row:' + (t + 2) + ';grid-column:3';
-      if (r.splits[t]) html += splitCell(r, t, cell, target);
-      else if (r.cover[t] >= 0) {                        // 被发牌组占用：可以按条件分配伤害
-        html += '<div class="tl-cell" style="' + cell + '">' + killCell(r.kills[t], t, undefined, '', target) +
-          '<button type="button" class="tl-split-btn" data-split="' + t + '">按条件分配伤害</button></div>';
-      } else html += killCell(r.kills[t], t, undefined, cell, target);
+      const cell = 'grid-row:' + (t + R) + ';grid-column:3', sendPos = 'grid-row:' + (t + R) + ';grid-column:4';
+      if (r.splits[t]) html += splitCell(r, t, 'grid-row:' + (t + R) + ';grid-column:3 / span 2', target);
+      else {
+        if (r.cover[t] >= 0) {                           // 被发牌组占用：可以按条件分配
+          html += '<div class="tl-cell" style="' + cell + '">' + killCell(r.kills[t], t, undefined, '', target) +
+            '<button type="button" class="tl-split-btn" data-split="' + t + '">按条件分配</button></div>';
+        } else html += killCell(r.kills[t], t, undefined, cell, target);
+        html += sendCell(r.sends[t], t, undefined, sendPos, target, !!r.kills[t]);
+      }
     }
     r.placements.forEach((p, i) => {
       if (p.at >= n) return;
@@ -265,14 +415,14 @@
         : p.reshuffle === 'natural' ? '<div class="tl-tag">' + RESHUFFLE.natural + '</div>'
           : p.reshuffle === 'forced' ? '<div class="tl-tag warn">' + RESHUFFLE.forced(p) + '</div>' : '';
       html += '<div class="tl-item deal' + (target === 'deal' ? ' target' : '') + (p.conflict ? ' bad' : '') + '" data-slot="deal" data-turn="' + p.at +
-        '" data-span="' + p.shown + '" style="grid-row:' + (p.at + 2) + ' / span ' + p.shown + ';grid-column:2">' +
+        '" data-span="' + p.shown + '" style="grid-row:' + (p.at + 3) + ' / span ' + p.shown + ';grid-column:2">' +
         '<span class="tl-grip" data-drag="deal" data-id="' + p.id + '" data-from="' + i + '" aria-hidden="true">⠿</span>' +
         '<div class="tl-body"><div class="tl-name">' + esc(p.name) + '</div><div class="tl-rate">' +
         (p.rate === null ? '有误' : short(p.rate)) + '</div><div class="tl-sub">' + (p.span > 1 ? rangeText(p.at, p.end) + ' 共享' : '单回合') + '</div>' + note + '</div>' +
         '<button type="button" class="tl-remove" data-remove-deal="' + i + '" aria-label="移除' + esc(p.name) + '">×</button></div>';
     });
     const tl = $('timeline');
-    tl.style.gridTemplateRows = 'auto repeat(' + n + ', minmax(58px, auto))';
+    tl.style.gridTemplateRows = 'auto auto repeat(' + n + ', minmax(58px, auto))';
     tl.innerHTML = html;
     $('turnMinus').disabled = n <= 1;
     $('turnPlus').disabled = n >= C.MAX_TURNS;
@@ -281,14 +431,15 @@
 
   function render() {
     prune();
-    let r = C.evaluate(plan, killInfo, dealInfo);
+    let r = evaluate();
     const changed = normalizeSplits(r);
     if (changed) {
       notice = changed;
       save();
-      r = C.evaluate(plan, killInfo, dealInfo);
+      r = evaluate();
     }
     renderResult(r);
+    renderSteps(r);
     renderPalette();
     renderTimeline(r);
     $('comboNotice').hidden = !notice;
@@ -301,11 +452,12 @@
 
   /** alt：放进分条件的哪一格（条件序号 / 'other'）；fromAlt：从分条件的哪一格拖过来 */
   function place(kind, id, turn, from, alt, fromAlt) {
-    if (kind === 'kill') {
+    if (kind === 'kill' || kind === 'send') {
+      const cells = kind === 'kill' ? { turn: plan.kill, alts: 'alts', other: 'other' } : { turn: plan.send, alts: 'sends', other: 'sendOther' };
       const setAt = (t, a, value) => {
-        if (a === undefined || !plan.split[t]) plan.kill[t] = value;
-        else if (a === 'other') plan.split[t].other = value;
-        else plan.split[t].alts[Number(a)] = value;
+        if (a === undefined || !plan.split[t]) cells.turn[t] = value;
+        else if (a === 'other') plan.split[t][cells.other] = value;
+        else plan.split[t][cells.alts][Number(a)] = value;
       };
       if (from !== undefined && !(from === turn && fromAlt === alt)) setAt(from, fromAlt, null);
       setAt(turn, alt, id);
@@ -332,6 +484,14 @@
     const b = e.target.closest('button, .tl-item');
     if (!b) return;
     if (b.dataset.removeKill !== undefined) { plan.kill[Number(b.dataset.removeKill)] = null; commit(); return; }
+    if (b.dataset.removeSend !== undefined) {
+      const [t, a] = b.dataset.removeSend.split(':');
+      if (a === undefined) plan.send[Number(t)] = null;
+      else if (a === 'other') plan.split[Number(t)].sendOther = null;
+      else plan.split[Number(t)].sends[Number(a)] = null;
+      commit();
+      return;
+    }
     if (b.dataset.removeSplit !== undefined) {
       const [t, a] = b.dataset.removeSplit.split(':');
       if (a === 'other') plan.split[Number(t)].other = null;
@@ -339,14 +499,14 @@
       commit();
       return;
     }
-    if (b.dataset.split !== undefined) {                 // 按条件分配伤害：每个条件格先放原来的伤害组
-      const t = Number(b.dataset.split), r0 = C.evaluate(plan, killInfo, dealInfo), n = r0.placements[r0.cover[t]].alts;
-      plan.split[t] = { alts: Array.from({ length: n }, () => plan.kill[t]), other: null };
+    if (b.dataset.split !== undefined) {                 // 按条件分配：每个条件格先放原来的伤害组，送人格跟随回合
+      const t = Number(b.dataset.split), r0 = evaluate(), n = r0.placements[r0.cover[t]].alts;
+      plan.split[t] = { alts: Array.from({ length: n }, () => plan.kill[t]), other: null, sends: Array.from({ length: n }, () => null), sendOther: null };
       plan.kill[t] = null;
       commit();
       return;
     }
-    if (b.dataset.merge !== undefined) {                 // 合并：留下条件 1 的伤害组
+    if (b.dataset.merge !== undefined) {                 // 合并：留下条件 1 的伤害组和回合的送人组
       const t = Number(b.dataset.merge), sp = plan.split[t];
       plan.kill[t] = sp.alts.find(Boolean) || sp.other || null;
       plan.split[t] = null;
@@ -373,15 +533,17 @@
     plan.turns--;
     plan.kill.pop();
     plan.split.pop();
+    plan.send.pop();
     plan.deal = plan.deal.filter((p) => p.at < plan.turns);
     commit();
   });
   $('comboClear').addEventListener('click', () => {
-    if (!plan.kill.some(Boolean) && !plan.deal.length) return;
-    G.confirmBox('清空方案里放好的组？\n伤害组、发牌组本身不会删除。', { ok: '清空方案', danger: true }).then((yes) => {
+    if (!plan.kill.some(Boolean) && !plan.deal.length && !plan.send.some(Boolean) && !plan.split.some(Boolean)) return;
+    G.confirmBox('清空方案里放好的组？\n伤害组、发牌组、送人组本身不会删除。', { ok: '清空方案', danger: true }).then((yes) => {
       if (!yes) return;
       plan.kill = plan.kill.map(() => null);
       plan.split = plan.split.map(() => null);
+      plan.send = plan.send.map(() => null);
       plan.deal = [];
       selected = null;
       commit();
@@ -443,7 +605,7 @@
     setTimeout(() => { suppressClick = false; }, 0);
     d.ghost.remove();
     document.body.classList.remove('dragging');
-    $('timeline').classList.remove('drop-kill', 'drop-deal');
+    $('timeline').classList.remove('drop-kill', 'drop-deal', 'drop-send');
     if (d.hover) d.hover.classList.remove('drop-hover');
     if (drop && d.hover) {
       selected = null;
@@ -483,6 +645,8 @@
   function refresh() { if (!$('viewCombo').hidden) render(); }
   Kill.store.onChange(refresh);
   Deal.store.onChange(refresh);
+  Send.store.onChange(refresh);
+  document.addEventListener('sendresult', refresh);    // 送人组在后台算完了
   document.addEventListener('tabshow', (e) => { if (e.detail === 'combo') render(); });
 
   load();
