@@ -160,10 +160,19 @@ h1 {
 .field.invalid .field-hint { color: var(--danger); }
 .field-hp { margin-top: 6px; }
 
-/* AOE 其他目标：每行（群体伤害，敌方 HP） */
+/* 伤害维度：主目标、AOE 目标标题右边的「伤害维度 − n ＋」 */
+.dims-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.dims-row .field-name { margin: 0; }
+.dims { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-size: 12px; color: var(--muted); }
+.dims-label { margin-right: 2px; }
+.dims-count { min-width: 1.4em; text-align: center; font-size: 15px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.dims-step { width: 32px; height: 28px; padding: 0; font-size: 17px; line-height: 1; color: var(--text); background: var(--surface); }
+.dims-step:disabled { color: var(--muted); opacity: 0.5; cursor: default; }
+
+/* AOE 其他目标：每行（各维度的伤害，敌方 HP） */
 .aoe { margin: 6px 0 8px; }
 .aoe-row { border-top: 1px dashed var(--border); padding-top: 8px; margin-bottom: 4px; }
-.aoe-row-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.aoe-row-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
 .aoe-row-head .field-name { margin: 0; }
 .aoe-remove { padding: 0 10px; font-size: 16px; line-height: 24px; }
 .aoe-add { width: 100%; border-style: dashed; color: var(--accent); padding: 7px 0; }

@@ -1,4 +1,4 @@
-// 击破概率页面：伤害组（每组 4 张卡的均伤、HP、最多 5 个 AOE 其他目标、SL 次数）→ 调用 killprob.js 计算
+// 击破概率页面：伤害组（主目标各伤害维度的均伤、HP、最多 5 个 AOE 其他目标、SL 次数）→ 调用 killprob.js 计算
 // → 显示击破概率、SL 表、伤害分布图和击破概率曲线
 (function () {
   'use strict';
@@ -9,15 +9,18 @@
   const MAX_SL = 999;
   const SL_ROWS = 5;                                     // SL 表至少列出 0 ~ 5 次
   const MAX_AOE = 5;                                     // AOE 其他目标最多 5 个
+  const MAX_DIMS = K.MAX_CARDS;                          // 每个目标最多 6 个伤害维度（每个维度单独抽随机数）
+  const MAIN_DIMS = 4;                                   // 主目标默认 4 维（3 张卡 + EX），AOE 目标默认 1 维（一次群体伤害）
+  const CARD_NAMES = ['First', 'Second', 'Third', 'EX'];
 
   const $ = (id) => document.getElementById(id);
-  const cardInputs = [0, 1, 2, 3].map((i) => $('card' + i));
+  const cardInputs = () => Array.from($('cardList').querySelectorAll('input'));
   const hpInput = $('hp');
   const slInput = $('sl');
-  const inputs = cardInputs.concat(hpInput, slInput);
-  const fields = [0, 1, 2, 3, 4, 5].map((i) => $('field' + i));
+  const inputs = [hpInput, slInput];
+  const hpField = $('fieldHp'), slField = $('fieldSl');
   const aoeInputs = () => Array.from($('aoeList').querySelectorAll('input'));
-  const orderedInputs = () => cardInputs.concat(hpInput, aoeInputs(), slInput);   // 按 Enter 跳到下一格的顺序
+  const orderedInputs = () => cardInputs().concat(hpInput, aoeInputs(), slInput);   // 按 Enter 跳到下一格的顺序
 
   const intFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
   const fmt = (n) => intFormat.format(n);
@@ -63,7 +66,6 @@
     hint.textContent = text || hint.dataset.default || '';
     field.classList.toggle('invalid', !!invalid);
   }
-  const setHint = (i, text, invalid) => hintOn(fields[i], text, invalid);
 
   /** 一张卡的伤害范围提示，例如「65,160 ~ 79,567」 */
   function rangeText(avg) {
@@ -82,36 +84,45 @@
     if (!prep) {
       prep = K.prepare(avgs);
       prepCache.set(key, prep);
-      if (prepCache.size > 12) prepCache.delete(prepCache.keys().next().value);
+      if (prepCache.size > 24) prepCache.delete(prepCache.keys().next().value);
     }
     return prep;
   }
 
-  /** AOE 目标：一张卡（群体伤害）的 200 个随机数里，伤害 >= HP 的个数 */
-  const aoeKills = (avg, hp) => K.cardOutcomes(avg).filter((x) => x >= hp).length;
-
   /**
    * 算一个伤害组：返回 { status: 'ok', single, final, fail, sl, kills, total, prep, hp, avgs, aoeCount, aoeFactor }
    * 或 { status: 'idle' | 'error', message, parsed }。
-   * 有 AOE 其他目标时：每个目标单独抽随机数，全部击破才算，单次击破率 = 主目标 × 各 AOE 目标；SL 按单次击破率算
+   * 有 AOE 其他目标时：每个目标单独抽随机数，全部击破才算，单次击破率 = 主目标 × 各 AOE 目标；SL 按单次击破率算。
+   * AOE 目标和主目标一样可以有几个伤害维度，用同样的精确计算（1 维时组合总数 = 200）
    */
   function evaluate(data) {
     const cards = data.cards.map(parse), hp = parse(data.hp), sl = parseSL(data.sl);
-    const aoe = (data.aoe || []).map((a) => ({ dmg: parse(a.dmg), hp: parse(a.hp) }));
-    const aoeParts = aoe.map((a) => (a.dmg.error || a.hp.error || a.dmg.empty || a.hp.empty ? null
-      : { kills: aoeKills(a.dmg.value, a.hp.value), total: K.RAND_COUNT }));
+    let tooBig = false;                                  // 均伤太高（伤害和的范围太大），算不了
+    const prepOrNull = (avgs) => {
+      try { return prepared(avgs); } catch (e) { if (!(e instanceof RangeError)) throw e; tooBig = true; return null; }
+    };
+    const aoe = (data.aoe || []).map((a) => {
+      const c = a.cards.map(parse);
+      return { cards: c, hp: parse(a.hp), error: c.some((r) => r.error), empty: c.every((r) => r.empty) };
+    });
+    const aoeParts = aoe.map((a) => {
+      if (a.error || a.hp.error || a.empty || a.hp.empty) return null;
+      const p = prepOrNull(a.cards.map((r) => r.value));
+      return p && { kills: K.countAtLeast(p, a.hp.value), total: p.total };
+    });
     const parsed = { cards, hp, sl, aoe, aoeParts };
-    const aoeError = aoe.some((a) => a.dmg.error || a.hp.error);
+    const aoeError = aoe.some((a) => a.error || a.hp.error);
     const cardsOk = !cards.some((r) => r.error) && !cards.every((r) => r.empty);
     const avgs = cards.map((r) => r.value);
-    const prep = cardsOk ? prepared(avgs) : null;      // 均伤填好了就先算总伤害范围、平均（不用等 HP）
+    const prep = cardsOk ? prepOrNull(avgs) : null;    // 均伤填好了就先算总伤害范围、平均（不用等 HP）
     if (!cardsOk || hp.error || sl.error || aoeError) {
       if (cards.every((r) => r.empty) && !cards.some((r) => r.error) && !hp.error && !sl.error && !aoeError) return { status: 'idle', message: '输入均伤和 HP 后自动计算', parsed };
       return { status: 'error', message: '请检查标红的输入', parsed, prep };
     }
+    if (tooBig) return { status: 'error', message: '伤害太高，超出了计算范围', parsed, prep };
     if (hp.empty) return { status: 'idle', message: '再输入 HP 就能算出击破概率', parsed, prep };
-    const half = aoe.findIndex((a) => a.dmg.empty !== a.hp.empty);   // 只填了一半的 AOE 目标（两格都空的不算）
-    if (half >= 0) return { status: 'idle', message: 'AOE 目标 ' + (half + 1) + ' 还要填' + (aoe[half].dmg.empty ? '群体伤害' : '敌方 HP'), parsed, prep };
+    const half = aoe.findIndex((a) => a.empty !== !!a.hp.empty);   // 只填了一半的 AOE 目标（全都空的不算）
+    if (half >= 0) return { status: 'idle', message: 'AOE 目标 ' + (half + 1) + ' 还要填' + (aoe[half].empty ? '伤害' : '敌方 HP'), parsed, prep };
     const kills = K.countAtLeast(prep, hp.value);
     const others = aoeParts.filter(Boolean);
     const t = K.turnRate([{ kills, total: prep.total }].concat(others), sl.value);
@@ -165,17 +176,17 @@
   function cleanData(raw) {
     if (!raw || typeof raw !== 'object') return null;
     const str = (v) => (typeof v === 'string' ? v : '');
-    const cards = Array.isArray(raw.cards) ? raw.cards.slice(0, 4).map(str) : [];
-    while (cards.length < 4) cards.push('');
+    const dims = (v, fallback) => (Array.isArray(v) && v.length ? v.slice(0, MAX_DIMS).map(str) : fallback);
+    const cards = dims(raw.cards, ['', '', '', '']);
     const aoe = (Array.isArray(raw.aoe) ? raw.aoe : []).filter((a) => a && typeof a === 'object').slice(0, MAX_AOE)
-      .map((a) => ({ dmg: str(a.dmg), hp: str(a.hp) }));
+      .map((a) => ({ cards: dims(a.cards, [str(a.dmg)]), hp: str(a.hp) }));   // v0.7 以前 AOE 目标只有一格群体伤害（dmg）
     return { cards, hp: str(raw.hp), sl: str(raw.sl), aoe };
   }
 
   const store = new G.GroupStore({
     key: 'killprob.kill.v2', label: '伤害组', idPrefix: 'k',
     naming: (n) => '伤害组' + n,
-    create: () => ({ cards: ['', '', '', ''], hp: '', sl: '', aoe: [] }),
+    create: () => ({ cards: new Array(MAIN_DIMS).fill(''), hp: '', sl: '', aoe: [] }),
     clean: cleanData,
     legacy: () => {                                      // v0.3 只有一组：[4 张卡, HP]
       try {
@@ -196,39 +207,67 @@
 
   function loadInputs() {
     const d = store.active().data;
-    cardInputs.forEach((el, i) => { el.value = d.cards[i]; });
+    renderCards(d.cards);
     hpInput.value = d.hp;
     slInput.value = d.sl;
     renderAoe(d.aoe);
     orderedInputs().forEach(prettify);
   }
 
-  // ---------- AOE 其他目标：每行（群体伤害，敌方 HP） ----------
+  // ---------- 伤害维度：主目标、AOE 目标都可以增减（每个维度单独抽随机数） ----------
 
-  function aoeField(i, key, name, placeholder) {
+  /** 伤害维度的「− n ＋」；owner = 'main' 或 AOE 目标的行号 */
+  function dimsControl(owner, n, who) {
+    return '<span class="dims"><span class="dims-label">伤害维度</span>' +
+      '<button type="button" class="dims-step" data-dims="' + owner + '" data-step="-1" aria-label="' + who + '减少一个伤害维度"' + (n <= 1 ? ' disabled' : '') + '>−</button>' +
+      '<span class="dims-count">' + n + '</span>' +
+      '<button type="button" class="dims-step" data-dims="' + owner + '" data-step="1" aria-label="' + who + '增加一个伤害维度"' + (n >= MAX_DIMS ? ' disabled' : '') + '>＋</button></span>';
+  }
+
+  const input = (attrs, placeholder) => '<input type="text" inputmode="decimal" enterkeyhint="next" autocomplete="off" ' + attrs + ' placeholder="' + placeholder + '">';
+
+  /** 主目标：第 1 ~ 4 维叫 First / Second / Third / EX，再多的叫「伤害 5」「伤害 6」 */
+  function renderCards(list) {
+    $('cardList').innerHTML = list.map((v, i) =>
+      '<label class="field"><span class="field-name">' + (CARD_NAMES[i] || '伤害 ' + (i + 1)) + '</span>' +
+      input('data-card="' + i + '"', i === 3 ? '不出可留空' : '均伤') + '<span class="field-hint"></span></label>').join('');
+    cardInputs().forEach((el, i) => { el.value = list[i]; });
+    $('mainDims').innerHTML = dimsControl('main', list.length, '主目标');
+  }
+
+  // ---------- AOE 其他目标：每行（各维度的伤害，敌方 HP） ----------
+
+  function aoeField(i, key, j, name, placeholder) {
     return '<label class="field" data-field="' + key + '"><span class="field-name">' + name + '</span>' +
-      '<input type="text" inputmode="decimal" enterkeyhint="next" autocomplete="off" data-row="' + i + '" data-key="' + key + '" placeholder="' + placeholder + '">' +
+      input('data-row="' + i + '" data-key="' + key + '"' + (key === 'card' ? ' data-card="' + j + '"' : ''), placeholder) +
       '<span class="field-hint"></span></label>';
   }
 
   function renderAoe(list) {
     $('aoeList').innerHTML = list.map((a, i) =>
-      '<div class="aoe-row"><div class="aoe-row-head"><span class="field-name">AOE 目标 ' + (i + 1) + '</span>' +
+      '<div class="aoe-row"><div class="aoe-row-head"><span class="field-name">AOE 目标 ' + (i + 1) + '</span>' + dimsControl(i, a.cards.length, 'AOE 目标 ' + (i + 1)) +
       '<button type="button" class="aoe-remove" data-remove="' + i + '" aria-label="删除 AOE 目标 ' + (i + 1) + '">×</button></div>' +
-      '<div class="cards">' + aoeField(i, 'dmg', '群体伤害', '均伤') + aoeField(i, 'hp', '敌方 HP', '击破血量') + '</div></div>').join('');
-    aoeInputs().forEach((el) => { el.value = list[el.dataset.row][el.dataset.key]; });
+      '<div class="cards">' + a.cards.map((v, j) => aoeField(i, 'card', j, a.cards.length > 1 ? '伤害 ' + (j + 1) : '群体伤害', '均伤')).join('') +
+      aoeField(i, 'hp', 0, '敌方 HP', '击破血量') + '</div></div>').join('');
+    aoeInputs().forEach((el) => {
+      const a = list[el.dataset.row];
+      el.value = el.dataset.key === 'hp' ? a.hp : a.cards[el.dataset.card];
+    });
     $('aoeAdd').disabled = list.length >= MAX_AOE;
     $('aoeAdd').textContent = list.length >= MAX_AOE ? '最多 ' + MAX_AOE + ' 个 AOE 目标' : '＋ AOE 其他目标';
   }
 
-  /** AOE 各行的提示：群体伤害的范围、这个目标的击破率 */
+  /** AOE 各行的提示：各维度伤害的范围、这个目标的击破率 */
   function aoeHints(parsed) {
     $('aoeList').querySelectorAll('.aoe-row').forEach((row, i) => {
       const a = parsed.aoe[i], part = parsed.aoeParts[i];
       if (!a) return;
-      const fd = row.querySelector('[data-field="dmg"]'), fh = row.querySelector('[data-field="hp"]');
-      if (a.dmg.error) hintOn(fd, a.dmg.error, true);
-      else hintOn(fd, a.dmg.empty ? '' : rangeText(a.dmg.value));
+      row.querySelectorAll('[data-field="card"]').forEach((f, j) => {
+        const c = a.cards[j];
+        if (c.error) hintOn(f, c.error, true);
+        else hintOn(f, c.empty ? '' : rangeText(c.value));
+      });
+      const fh = row.querySelector('[data-field="hp"]');
       if (a.hp.error) hintOn(fh, a.hp.error, true);
       else hintOn(fh, part ? '击破率 ' + formatShort(part.kills / part.total) : '');
     });
@@ -236,7 +275,6 @@
 
   function saveInputs() {
     const d = store.active().data;
-    cardInputs.forEach((el, i) => { d.cards[i] = el.value; });
     d.hp = hpInput.value;
     d.sl = slInput.value;
     store.changed();
@@ -275,13 +313,13 @@
     const r = evaluate(store.active().data);
     current = r;
     const { cards, hp, sl } = r.parsed;
-    cards.forEach((c, i) => {
-      if (c.error) setHint(i, c.error, true);
-      else if (c.empty) setHint(i, '');
-      else setHint(i, rangeText(c.value));
+    $('cardList').querySelectorAll('.field').forEach((f, i) => {
+      const c = cards[i];
+      if (c.error) hintOn(f, c.error, true);
+      else hintOn(f, c.empty ? '' : rangeText(c.value));
     });
-    setHint(4, hp.error, !!hp.error);
-    setHint(5, sl.error, !!sl.error);
+    hintOn(hpField, hp.error, !!hp.error);
+    hintOn(slField, sl.error, !!sl.error);
     document.querySelector('.sl-step[data-step="-1"]').disabled = !sl.error && sl.value <= 0;
     document.querySelector('.sl-step[data-step="1"]').disabled = !sl.error && sl.value >= MAX_SL;
     aoeHints(r.parsed);
@@ -533,11 +571,16 @@
 
   // ---------- 事件 ----------
 
-  let pending = false;
+  let pending = null, slow = false;
   function schedule() {
-    if (pending) return;
-    pending = true;
-    setTimeout(() => { pending = false; update(); }, 0);   // 连续输入时合并成一次计算
+    if (pending && !slow) return;
+    clearTimeout(pending);                               // 连续输入时合并成一次计算；上次算得慢（维度多、伤害高）时等停下输入再算
+    pending = setTimeout(() => {
+      pending = null;
+      const t0 = performance.now();
+      update();
+      slow = performance.now() - t0 > 150;
+    }, slow ? 400 : 0);
   }
 
   /** Enter：跳到下一格（最后一格时收起键盘） */
@@ -554,11 +597,43 @@
     el.addEventListener('keydown', enterNext);
   });
 
+  const cardList = $('cardList');
+  cardList.addEventListener('input', (e) => {
+    const el = e.target;
+    if (el.dataset.card === undefined) return;
+    store.active().data.cards[Number(el.dataset.card)] = el.value;
+    active = null;
+    store.changed();
+    schedule();
+  });
+  cardList.addEventListener('focusout', (e) => { if (e.target.dataset.card !== undefined) prettify(e.target); });
+  cardList.addEventListener('keydown', enterNext);
+
+  /** 伤害维度的 − / ＋：去掉最后一维 / 在最后加一维（1 ~ 6 维）；加了之后光标放到新的一格 */
+  function changeDims(b) {
+    const d = store.active().data, main = b.dataset.dims === 'main', row = Number(b.dataset.dims);
+    const list = main ? d.cards : d.aoe[row].cards, add = Number(b.dataset.step) > 0;
+    if (add ? list.length >= MAX_DIMS : list.length <= 1) return;
+    if (add) list.push(''); else list.pop();
+    if (main) renderCards(list); else renderAoe(d.aoe);
+    active = null;
+    store.changed();
+    update();
+    const box = main ? cardList : aoeList.querySelectorAll('.aoe-row')[row];
+    const focus = add ? box.querySelectorAll('[data-card]')[list.length - 1] : box.querySelector('.dims-step[data-step="' + b.dataset.step + '"]');
+    if (focus && !focus.disabled) focus.focus();
+  }
+  $('mainDims').addEventListener('click', (e) => {
+    const b = e.target.closest('.dims-step');
+    if (b) changeDims(b);
+  });
+
   const aoeList = $('aoeList');
   aoeList.addEventListener('input', (e) => {
     const el = e.target;
     if (!el.dataset.key) return;
-    store.active().data.aoe[Number(el.dataset.row)][el.dataset.key] = el.value;
+    const a = store.active().data.aoe[Number(el.dataset.row)];
+    if (el.dataset.key === 'hp') a.hp = el.value; else a.cards[Number(el.dataset.card)] = el.value;
     active = null;
     store.changed();
     schedule();
@@ -566,6 +641,8 @@
   aoeList.addEventListener('focusout', (e) => { if (e.target.dataset.key) prettify(e.target); });
   aoeList.addEventListener('keydown', enterNext);
   aoeList.addEventListener('click', (e) => {
+    const step = e.target.closest('.dims-step');
+    if (step) { changeDims(step); return; }
     const b = e.target.closest('[data-remove]');
     if (!b) return;
     store.active().data.aoe.splice(Number(b.dataset.remove), 1);
@@ -577,7 +654,7 @@
   $('aoeAdd').addEventListener('click', () => {
     const list = store.active().data.aoe;
     if (list.length >= MAX_AOE) return;
-    list.push({ dmg: '', hp: '' });
+    list.push({ cards: [''], hp: '' });
     renderAoe(list);
     store.changed();
     update();
@@ -596,14 +673,18 @@
     });
   });
 
+  // 清空：各格的内容和 AOE 目标都清掉，主目标的伤害维度数不变
   $('clear').addEventListener('click', () => {
+    const d = store.active().data;
     inputs.forEach((el) => { el.value = ''; });
-    store.active().data.aoe = [];
+    d.cards = d.cards.map(() => '');
+    d.aoe = [];
+    renderCards(d.cards);
     renderAoe([]);
     active = null;
     saveInputs();
     update();
-    cardInputs[0].focus();
+    cardInputs()[0].focus();
   });
 
   const chart = $('chart');

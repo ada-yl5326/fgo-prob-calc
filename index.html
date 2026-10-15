@@ -64,29 +64,9 @@
     </section>
 
     <section class="panel">
-      <div class="cards">
-        <label class="field" id="field0">
-          <span class="field-name">First</span>
-          <input id="card0" type="text" inputmode="decimal" enterkeyhint="next" autocomplete="off" placeholder="均伤">
-          <span class="field-hint"></span>
-        </label>
-        <label class="field" id="field1">
-          <span class="field-name">Second</span>
-          <input id="card1" type="text" inputmode="decimal" enterkeyhint="next" autocomplete="off" placeholder="均伤">
-          <span class="field-hint"></span>
-        </label>
-        <label class="field" id="field2">
-          <span class="field-name">Third</span>
-          <input id="card2" type="text" inputmode="decimal" enterkeyhint="next" autocomplete="off" placeholder="均伤">
-          <span class="field-hint"></span>
-        </label>
-        <label class="field" id="field3">
-          <span class="field-name">EX</span>
-          <input id="card3" type="text" inputmode="decimal" enterkeyhint="next" autocomplete="off" placeholder="不出可留空">
-          <span class="field-hint"></span>
-        </label>
-      </div>
-      <label class="field field-hp" id="field4">
+      <div class="dims-row"><span class="field-name">主目标</span><span id="mainDims"></span></div>
+      <div class="cards" id="cardList"></div>
+      <label class="field field-hp" id="fieldHp">
         <span class="field-name">HP</span>
         <input id="hp" type="text" inputmode="decimal" enterkeyhint="next" autocomplete="off" placeholder="击破血量">
         <span class="field-hint" data-default="要算固伤时，填「击破血量 − 各卡固伤之和」">要算固伤时，填「击破血量 − 各卡固伤之和」</span>
@@ -96,7 +76,7 @@
         <button type="button" class="aoe-add" id="aoeAdd">＋ AOE 其他目标</button>
         <div class="aoe-tip" id="aoeTip">群体攻击同时打到的其他敌人，每个目标单独抽随机数，全部击破才算</div>
       </div>
-      <label class="field field-sl" id="field5">
+      <label class="field field-sl" id="fieldSl">
         <span class="field-name">SL 次数</span>
         <span class="sl-row">
           <input id="sl" type="text" inputmode="numeric" enterkeyhint="done" autocomplete="off" placeholder="0">
@@ -136,9 +116,10 @@
     <details class="panel about">
       <summary>计算规则与使用说明</summary>
       <ul>
-        <li>每张卡的伤害 = 向下取整(均伤 × 随机数)，随机数从 0.900 ~ 1.099 共 200 个值中等概率抽取，每张卡独立；总伤害 ≥ HP 即为击破。统计了全部 200⁴ 种组合，是精确值，取整方式与 Excel 计算器相同。</li>
-        <li>均伤可以带小数，不出的卡留空。固伤不乘随机数：要算固伤时，HP 填「击破血量 − 各卡固伤之和」。</li>
-        <li><b>AOE 其他目标</b>：群体攻击同时打到的其他敌人，每行填打到它的群体伤害和它的 HP，最多 5 个。每个目标单独抽随机数，全部击破才算：击破率 = 主目标 × 各 AOE 目标的击破率，SL 也按这个算。图表画的是主目标的总伤害。</li>
+        <li>每个伤害维度（一张卡、一次攻击）的伤害 = 向下取整(均伤 × 随机数)，随机数从 0.900 ~ 1.099 共 200 个值中等概率抽取，每个维度独立；总伤害 ≥ HP 即为击破。统计了全部 200<sup>n</sup> 种组合（n = 维度数），取整方式与 Excel 计算器相同。</li>
+        <li><b>伤害维度</b>：每个单独抽随机数的伤害算一个维度。主目标默认 4 维（First / Second / Third / EX），AOE 目标默认 1 维，都可以用 − / ＋ 增减，1 ~ 12 维。6 维以内是精确值；7 维以上是浮点近似（误差约 10⁻¹³，显示的位数看不出差别）。维度多、伤害高时要算一会儿（10 维、均伤之和 1000 万时约 1 秒多），停下输入后才开始算。</li>
+        <li>均伤可以带小数，不出的卡留空（留空 = 这一维伤害为 0）。固伤不乘随机数：要算固伤时，HP 填「击破血量 − 各卡固伤之和」。</li>
+        <li><b>AOE 其他目标</b>：群体攻击同时打到的其他敌人，每行填打到它的伤害（默认 1 维，可以增减）和它的 HP，最多 5 个。每个目标单独抽随机数，全部击破才算：击破率 = 主目标 × 各 AOE 目标的击破率，SL 也按这个算。图表画的是主目标的总伤害。</li>
         <li><b>SL 次数</b>：没击破时可以重来几次。只适用于重来后发到的牌不变、只重新抽伤害随机数的情况。SL n 次 = 一共 n + 1 次机会，击破率 = 1 − (1 − 单次击破率)^(n+1)。不用时留空，也可以点右边的 − / ＋ 调整。</li>
         <li><b>伤害组</b>：可以保存好几组输入（例如每个回合一组、每种牌型一组），在「综合击破概率」页放进各个回合。</li>
         <li><b>伤害分布</b>：柱子 = 总伤害落在这一段的概率；点按某处，显示总伤害 ≥ 该处的概率（即 HP 为该处时的击破率）。<b>击破概率曲线</b>：高度 = HP 为 X 时的击破率，紫色是 SL 后的击破率；点按或滑动可以查看任意 HP。有 AOE 目标时，曲线高度已乘上 AOE 目标的击破率，纵轴跟着最高点缩放。</li>
@@ -244,7 +225,7 @@
   </div>
 
   <footer>
-    <div>v0.7 · 计算全部在本机完成，不上传任何数据</div>
+    <div>v0.8 · 计算全部在本机完成，不上传任何数据</div>
     <div class="footer-links">
       <a href="https://github.com/ada-yl5326/fgo-prob-calc" target="_blank" rel="noopener">GitHub 仓库</a> ·
       <a href="https://space.bilibili.com/28108391" target="_blank" rel="noopener">作者 B站主页</a>

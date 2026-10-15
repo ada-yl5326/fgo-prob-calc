@@ -9,8 +9,12 @@
  *
  * 精确计算的做法与 Python 版不同，但结果相同：
  *     单卡伤害都是整数，几张卡相加在双精度下没有任何舍入误差（远小于 2^53），相加顺序不影响结果。
- *     所以把卡分成前两张、后两张，各自列出全部 200² = 40000 种和并排序，
- *     再用双指针数出 a + b >= HP 的组合数——手机上几毫秒即可（Python 版的 200³ 排序在手机上太慢）。
+ *     所以把卡分成前后两半（最多 6 + 6 张），各自统计全部组合的伤害和：每个不同的和出现了几次，
+ *     再用双指针数出 a + b >= HP 的组合数——4 张卡时手机上几毫秒即可（Python 版的 200³ 排序在手机上太慢）。
+ *     一半有 3 张以上的卡时，不列出 200^k 种组合，而是一张一张地按伤害和直接计数（伤害和是整数，范围只有均伤之和的约 20%）。
+ *     6 张卡以内：组合总数 <= 200⁶ ≈ 6.4 × 10¹³，组合数是精确的整数（< 2^53）；
+ *     7 ~ 12 张卡：每一半的组合数仍是精确整数，两半相乘后超过 2^53，结果是浮点近似值（相对误差约 10⁻¹³）。
+ *     耗时主要取决于各卡均伤之和：电脑上 10 张卡、均伤之和 1000 万约 1 秒多。
  */
 (function (root) {
   'use strict';
@@ -18,7 +22,8 @@
   var RAND_COUNT = 200;
   var RAND_VALUES = [];                                  // 0.900 ~ 1.099
   for (var a = -100; a < 100; a++) RAND_VALUES.push(1.0 + a / 1000);
-  var MAX_CARDS = 4;                                     // 一回合 3 张 + EX
+  var MAX_CARDS = 12;                                    // 最多 12 张卡（伤害维度），两半各 6 张
+  var DENSE_LIMIT = 1 << 22;                             // 按伤害和直接计数时，计数表最多 400 多万格（32 MB）
 
   /** 与 Excel 的 ROUNDDOWN(x, 0) 一致的向下取整：先按 15 位有效数字修整浮点误差，再向下取整 */
   function excelFloor(x) {
@@ -45,9 +50,43 @@
     return s.sort();                                     // TypedArray 的 sort 按数值排序
   }
 
+  /** 排好序的伤害和 → { v: 不同的取值（从小到大）, c: 每个取值的组合数 } */
+  function countSorted(s) {
+    var v = [], c = [];
+    for (var i = 0; i < s.length; i++) {
+      if (v.length && v[v.length - 1] === s[i]) c[c.length - 1]++;
+      else { v.push(s[i]); c.push(1); }
+    }
+    return { v: new Float64Array(v), c: new Float64Array(c) };
+  }
+
+  /**
+   * 最多 6 张卡所有随机数组合的伤害和，统计成 { v, c }（同 countSorted；组合数 <= 200⁶ < 2^53，是精确的整数）。
+   * 前两张列出全部 40000 种和；从第三张起一张一张加：按伤害和直接计数（伤害和是整数，范围只有均伤之和的约 20%）
+   */
+  function sumCounts(cards) {
+    var d = countSorted(sortedSums(cards.slice(0, 2)));
+    for (var c = 2; c < cards.length; c++) {
+      var card = cards[c], lo = d.v[0] + card[0], hi = d.v[d.v.length - 1] + card[RAND_COUNT - 1];
+      if (hi - lo + 1 > DENSE_LIMIT) {
+        if (cards.length === 3) return countSorted(sortedSums(cards));   // 均伤上千万、范围太大：列出 800 万种和再排序
+        throw new RangeError('伤害太高，超出了计算范围');
+      }
+      var table = new Float64Array(hi - lo + 1);
+      for (var i = 0; i < d.v.length; i++) {
+        var base = d.v[i] - lo, n = d.c[i];
+        for (var j = 0; j < RAND_COUNT; j++) table[base + card[j]] += n;
+      }
+      var v = [], cnt = [];
+      for (var k = 0; k < table.length; k++) if (table[k]) { v.push(lo + k); cnt.push(table[k]); }
+      d = { v: new Float64Array(v), c: new Float64Array(cnt) };
+    }
+    return d;
+  }
+
   /**
    * 预处理均伤（只和均伤有关，改 HP 时不用重算）。
-   * 返回 { a, b, total, min, max, mean }：a、b 为前两张 / 后两张卡的全部伤害和；
+   * 返回 { a, b, total, min, max, mean }：a、b 为前一半 / 后一半卡的伤害和统计（{ v, c }，b 另有 atLeast[j] = 取值 >= v[j] 的组合数）；
    * total = 组合总数 200^n；min / max = 随机数全部为 0.900 / 1.099 时的总伤害；mean = 总伤害的平均值。
    */
   function prepare(avgDamages) {
@@ -57,19 +96,25 @@
     cards.forEach(function (card) {
       for (var i = 0; i < RAND_COUNT; i++) mean += card[i] / RAND_COUNT;
     });
-    var a = sortedSums(cards.slice(0, 2)), b = sortedSums(cards.slice(2));
+    var half = Math.floor(cards.length / 2);
+    var a = sumCounts(cards.slice(0, half)), b = sumCounts(cards.slice(half));
+    var atLeast = new Float64Array(b.v.length + 1);
+    for (var j = b.v.length - 1; j >= 0; j--) atLeast[j] = atLeast[j + 1] + b.c[j];
+    b.atLeast = atLeast;
     return {
-      a: a, b: b, total: a.length * b.length,
-      min: a[0] + b[0], max: a[a.length - 1] + b[b.length - 1], mean: mean,
+      a: a, b: b, total: Math.pow(RAND_COUNT, cards.length),
+      min: a.v[0] + b.v[0], max: a.v[a.v.length - 1] + b.v[b.v.length - 1], mean: mean,
     };
   }
 
-  /** 总伤害 >= x 的组合数 */
+  /** 总伤害 >= x 的组合数（7 张卡以上时组合数超过 2^53，是浮点近似值，相对误差约 10⁻¹³；必定 / 不可能击破时仍是精确的） */
   function countAtLeast(prep, x) {
-    var a = prep.a, b = prep.b, n = b.length, j = n, count = 0;
-    for (var i = 0; i < a.length; i++) {                 // a 从小到大，满足 a[i] + b[j] >= x 的 j 只会越来越靠前
-      while (j > 0 && a[i] + b[j - 1] >= x) j--;
-      count += n - j;
+    if (x <= prep.min) return prep.total;
+    if (x > prep.max) return 0;
+    var av = prep.a.v, ac = prep.a.c, bv = prep.b.v, atLeast = prep.b.atLeast, j = bv.length, count = 0;
+    for (var i = 0; i < av.length; i++) {                // a 从小到大，满足 a[i] + b[j] >= x 的 j 只会越来越靠前
+      while (j > 0 && av[i] + bv[j - 1] >= x) j--;
+      count += ac[i] * atLeast[j];
     }
     return count;
   }
@@ -103,7 +148,7 @@
     var atLeast = edges.map(function (x) { return countAtLeast(prep, x); });
     var bins = [];
     for (var k = 0; k + 1 < edges.length; k++) {
-      bins.push({ from: edges[k], to: edges[k + 1] - 1, count: atLeast[k] - atLeast[k + 1] });
+      bins.push({ from: edges[k], to: edges[k + 1] - 1, count: Math.max(0, atLeast[k] - atLeast[k + 1]) });   // 7 张卡以上时防止浮点误差出现负数
     }
     return bins;
   }

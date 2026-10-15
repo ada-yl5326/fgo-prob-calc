@@ -2,7 +2,7 @@
  * 工作文件的导入导出（不依赖页面：网页、Node 测试都能用）。
  *
  * 工作文件 = 一个工作目录的全部内容：伤害组、发牌组、综合页的方案。
- *     { app: 'Laplace NS', format: 1, name, exportedAt, data: { kill: { groups }, deal: { groups }, combo: 方案 } }
+ *     { app: 'Laplace NS', format: 2, name, exportedAt, data: { kill: { groups }, deal: { groups }, combo: 方案 } }
  * 文件就是这段 JSON（方便阅读）。
  * 分享码用更短的紧凑格式（见 compact()：不写字段名和组的编号，牌型、选牌写成短字符串，数字去掉千分位逗号），
  *     「LN2z.」+ 压缩后的 base64url；不压缩更短、或浏览器不支持压缩时用「LN2r.」。
@@ -14,7 +14,7 @@
   'use strict';
 
   var APP = 'Laplace NS';
-  var FORMAT = 1;                                        // 文件格式的版本：以后改格式时加 1，并继续能读旧版本
+  var FORMAT = 2;                                        // 文件格式的版本：以后改格式时加 1，并继续能读旧版本（2 = v0.8 起伤害维度可以增减）
   var MAX_TEXT = 2 * 1024 * 1024;                        // 导入的内容最多 2 MB
 
   // ---------- base64url ----------
@@ -58,11 +58,12 @@
   }
 
   // ---------- 紧凑格式（分享码用）----------
-  // [2, 名称, 伤害组们, 发牌组们, 方案]；组用在数组里的位置（从 1 开始）互相引用，0 = 没有。
-  //   伤害组：[名称, 4 张卡的均伤, HP, SL, [AOE 1 群体伤害, AOE 1 HP, …]]（末尾空的项省略）
+  // [3, 名称, 伤害组们, 发牌组们, 方案]；组用在数组里的位置（从 1 开始）互相引用，0 = 没有。
+  //   伤害组：[名称, [主目标各维度的均伤], HP, SL, [[AOE 1 各维度的均伤…, AOE 1 HP], …]]（末尾空的项省略）
+  //   （版本 2 = v0.7 以前，主目标固定 4 维、AOE 目标 1 维：[名称, 4 张卡的均伤, HP, SL, [AOE 1 群体伤害, AOE 1 HP, …]]，仍然能读）
   //   发牌组：[名称, 人数 × 10 + 回合范围, 「配卡+纹章位」用 | 隔开, [[15 位选牌, 仅含位, 不能有位], …], 正在编辑第几种条件]
   //   方案：[回合数, 各回合的伤害组, [[第几回合, 发牌组], …], [[第几回合, [各条件的伤害组], 其他], …]]
-  // 和页面的数据结构对应；以后页面的数据结构变了，这里要一起改（并把 2 加 1）。
+  // 和页面的数据结构对应；以后页面的数据结构变了，这里要一起改（并把 3 加 1，继续能读旧版本）。
 
   var num = function (s) { return String(s === undefined || s === null ? '' : s).replace(/[,，\s]/g, ''); };
   var trim = function (a, empty) { while (a.length && empty(a[a.length - 1])) a.pop(); return a; };
@@ -75,9 +76,9 @@
     d.kill.groups.forEach(function (g, i) { kIndex[g.id] = i + 1; });
     d.deal.groups.forEach(function (g, i) { dIndex[g.id] = i + 1; });
     var K = d.kill.groups.map(function (g) {
-      var x = g.data || {}, aoe = [];
-      (x.aoe || []).forEach(function (a) { aoe.push(num(a.dmg), num(a.hp)); });
-      var row = [str(g.name)].concat((x.cards || []).slice(0, 4).map(num), [num(x.hp), num(x.sl)]);
+      var x = g.data || {};
+      var aoe = (x.aoe || []).map(function (a) { return (a.cards || []).map(num).concat(num(a.hp)); });
+      var row = [str(g.name), (x.cards || []).map(num), num(x.hp), num(x.sl)];
       return aoe.length ? row.concat([aoe]) : trim(row, function (v) { return v === ''; });
     });
     var bits = function (rows) {                         // 3 × 3 的开关 → 9 位
@@ -108,17 +109,30 @@
         }).filter(Boolean)];
       trim(C, function (v) { return Array.isArray(v) && !v.length; });
     }
-    return [2, str(file.name), K, D, C];
+    return [3, str(file.name), K, D, C];
   }
 
   /** 紧凑格式 → { name, data }（结构和页面的一样；读进页面后还会经过各页面自己的检查） */
   function expand(a) {
-    if (!Array.isArray(a) || a[0] !== 2 || !Array.isArray(a[2]) || !Array.isArray(a[3])) throw new Error('无法识别：分享码不完整或已损坏');
+    if (Array.isArray(a) && a[0] > 3) throw new Error('这个分享码来自更新的版本，请先刷新网页、更新到最新版再导入');
+    if (!Array.isArray(a) || (a[0] !== 2 && a[0] !== 3) || !Array.isArray(a[2]) || !Array.isArray(a[3])) throw new Error('无法识别：分享码不完整或已损坏');
+    var v2 = a[0] === 2;
     var kill = a[2].map(function (r, i) {
       r = Array.isArray(r) ? r : [];
-      var aoe = [], flat = Array.isArray(r[7]) ? r[7] : [];
-      for (var k = 0; k + 1 < flat.length; k += 2) aoe.push({ dmg: str(flat[k]), hp: str(flat[k + 1]) });
-      return { id: 'k' + (i + 1), name: str(r[0]), data: { cards: [1, 2, 3, 4].map(function (j) { return str(r[j]); }), hp: str(r[5]), sl: str(r[6]), aoe: aoe } };
+      var cards, rest, aoe = [];
+      if (v2) {                                          // 版本 2：主目标 4 维，AOE 目标 1 维（群体伤害, HP 两两一组）
+        cards = [1, 2, 3, 4].map(function (j) { return str(r[j]); });
+        rest = r.slice(5);
+        var flat = Array.isArray(r[7]) ? r[7] : [];
+        for (var k = 0; k + 1 < flat.length; k += 2) aoe.push({ cards: [str(flat[k])], hp: str(flat[k + 1]) });
+      } else {
+        cards = (Array.isArray(r[1]) ? r[1] : []).map(str);
+        rest = r.slice(2);
+        (Array.isArray(r[4]) ? r[4] : []).forEach(function (x) {
+          if (Array.isArray(x) && x.length >= 2) aoe.push({ cards: x.slice(0, -1).map(str), hp: str(x[x.length - 1]) });
+        });
+      }
+      return { id: 'k' + (i + 1), name: str(r[0]), data: { cards: cards, hp: str(rest[0]), sl: str(rest[1]), aoe: aoe } };
     });
     var flags = function (v) {
       var out = [];
