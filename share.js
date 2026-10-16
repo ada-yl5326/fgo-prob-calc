@@ -15,11 +15,12 @@
   'use strict';
 
   var APP = 'Laplace NS';
-  var FORMAT = 4;                                        // 文件格式的版本：以后改格式时加 1，并继续能读旧版本（2 = v0.8 起伤害维度可以增减；3 = v0.9 起有送人组；4 = v1.0 起有 buff 组）
-  var COMPACT = 5;                                       // 紧凑格式（分享码）的版本，见 compact()
+  var FORMAT = 5;                                        // 文件格式的版本：以后改格式时加 1，并继续能读旧版本（2 = v0.8 起伤害维度可以增减；3 = v0.9 起有送人组；4 = v1.0 起有 buff 组；5 = v1.1 起从者有受击要求）
+  var COMPACT = 6;                                       // 紧凑格式（分享码）的版本，见 compact()
   var MODES = ['atLeast', 'exactly', 'atMost'];          // 二项分布 buff：至少 / 恰好 / 至多
   var DECKS = ['BBBAQ', 'BBAAQ', 'BBAQQ', 'BAAQQ', 'BAAAQ', 'BAQQQ'];
   var ROLES = ['must', 'may', 'keep', 'immortal'];       // 送人组的从者角色：要退场 / 可以退场 / 不能退场 / 不会死
+  var HIT_TYPES = ['B', 'A', 'Q', 'N', 'NP'], HIT_CRIT = ['any', 'yes', 'no'], HIT_CMP = ['ge', 'eq', 'le'];   // 从者的受击要求
   var MAX_TEXT = 2 * 1024 * 1024;                        // 导入的内容最多 2 MB
 
   // ---------- base64url ----------
@@ -64,7 +65,7 @@
   }
 
   // ---------- 紧凑格式（分享码用）----------
-  // [5, 名称, 伤害组们, 发牌组们, 方案, 送人组们, buff 组们]；组用在数组里的位置（从 1 开始）互相引用，0 = 没有。
+  // [6, 名称, 伤害组们, 发牌组们, 方案, 送人组们, buff 组们]；组用在数组里的位置（从 1 开始）互相引用，0 = 没有。
   //   伤害组：[名称, [主目标各维度的均伤], HP, SL, [[AOE 1 各维度的均伤…, AOE 1 HP], …]]（末尾空的项省略）
   //   （版本 2 = v0.7 以前，主目标固定 4 维、AOE 目标 1 维：[名称, 4 张卡的均伤, HP, SL, [AOE 1 群体伤害, AOE 1 HP, …]]，仍然能读）
   //   发牌组：[名称, 人数 × 10 + 回合范围, 「配卡+纹章位」用 | 隔开, [[15 位选牌, 仅含位, 不能有位], …], 正在编辑第几种条件]
@@ -78,7 +79,10 @@
   //     敌人：[行动次数, 普通攻击均伤, 开关位, 暴击均伤, 暴击率, 牌型（DECKS 里第几个，从 1 开始）, 放宝具的位（第 k 次 = 第 k−1 位）,
   //           宝具均伤, 开技能概率, [对各从者的伤害倍率]]
   //           开关位：1 普通攻击全体，2 暴击，4 暴击全体，8 牌型，16 宝具，32 宝具全体，64 开技能，128 伤害倍率
-  //     从者：[角色（ROLES 里第几个，从 0 开始）, HP, 被攻击权重, 开关位（1 嘲讽，2 战续血量分别填）, 无敌次数, 战续次数, [各次战续的血量]]
+  //     从者：[角色（ROLES 里第几个，从 0 开始）, HP, 被攻击权重, 开关位（1 嘲讽，2 战续血量分别填，4 受击要求）, 无敌次数, 战续次数, [各次战续的血量],
+  //           [受击要求：[类型（B A Q 普通 宝具，从 0 开始）, 暴击（不限 暴击 不暴击）, 至少 0 / 恰好 1 / 至多 2, 次数]（末尾的 0 和空省略）…]]
+  //           （受击要求没开、只有一条默认的空条目时省略）
+  //   （版本 5 = v1.0，从者没有受击要求，仍然能读）
   //   （版本 3 = v0.8，没有送人组、方案里没有送人格，仍然能读）
   // 和页面的数据结构对应；以后页面的数据结构变了，这里要一起改（并把 COMPACT 加 1，继续能读旧版本）。
 
@@ -101,8 +105,13 @@
         arr(mu.values).map(num)], blank);
     });
     var S = arr(x.servants).map(function (v) {
-      return trim([Math.max(0, ROLES.indexOf(v.role)), num(v.hp), num(v.weight), (v.taunt ? 1 : 0) | (v.gutsEach ? 2 : 0), v.inv || 0, v.guts || 0,
-        arr(v.gutsHp).map(num)], blank);
+      var hi = v.hits || {}, rows = arr(hi.rows).map(function (r) {
+        return trim([Math.max(0, HIT_TYPES.indexOf(r.type)), Math.max(0, HIT_CRIT.indexOf(r.crit)), Math.max(0, HIT_CMP.indexOf(r.cmp)), num(r.n)],
+          function (c) { return c === '' || c === 0; });
+      });
+      if (!hi.on && rows.length === 1 && rows[0].length === 1 && rows[0][0] === 3) rows = [];   // 只有一条默认的空条目
+      return trim([Math.max(0, ROLES.indexOf(v.role)), num(v.hp), num(v.weight), (v.taunt ? 1 : 0) | (v.gutsEach ? 2 : 0) | (hi.on ? 4 : 0), v.inv || 0, v.guts || 0,
+        arr(v.gutsHp).map(num), rows], blank);
     });
     return trim([str(g.name), E, S, x.backup === false ? 0 : 1, num(x.sl)], blank);
   }
@@ -127,9 +136,14 @@
     });
     var servants = arr(r[2]).map(function (v) {
       v = arr(v);
-      var flag = int(v[3], 0, 3) || 0;
+      var flag = int(v[3], 0, 7) || 0;
+      var rows = arr(v[7]).map(function (r) {
+        r = arr(r);
+        return { type: HIT_TYPES[int(r[0], 0, 4) || 0], crit: HIT_CRIT[int(r[1], 0, 2) || 0], cmp: HIT_CMP[int(r[2], 0, 2) || 0], n: str(r[3]) };
+      });
       return { role: ROLES[int(v[0], 0, 3) || 0], hp: str(v[1]), weight: str(v[2]), taunt: !!(flag & 1), inv: int(v[4], 0, 99) || 0,
-        guts: int(v[5], 0, 99) || 0, gutsHp: arr(v[6]).map(str), gutsEach: !!(flag & 2) };
+        guts: int(v[5], 0, 99) || 0, gutsHp: arr(v[6]).map(str), gutsEach: !!(flag & 2),
+        hits: { on: !!(flag & 4), rows: rows.length ? rows : [{ type: 'N', crit: 'any', cmp: 'ge', n: '' }] } };
     });
     return { id: 's' + (i + 1), name: str(r[0]), data: { enemies: enemies, servants: servants, backup: r[3] !== 0, sl: str(r[4]) } };
   }
@@ -219,7 +233,7 @@
   /** 紧凑格式 → { name, data }（结构和页面的一样；读进页面后还会经过各页面自己的检查） */
   function expand(a) {
     if (Array.isArray(a) && a[0] > COMPACT) throw new Error('这个分享码来自更新的版本，请先刷新网页、更新到最新版再导入');
-    if (!Array.isArray(a) || [2, 3, 4, 5].indexOf(a[0]) < 0 || !Array.isArray(a[2]) || !Array.isArray(a[3])) throw new Error('无法识别：分享码不完整或已损坏');
+    if (!Array.isArray(a) || [2, 3, 4, 5, 6].indexOf(a[0]) < 0 || !Array.isArray(a[2]) || !Array.isArray(a[3])) throw new Error('无法识别：分享码不完整或已损坏');
     var v2 = a[0] === 2;
     var kill = a[2].map(function (r, i) {
       r = Array.isArray(r) ? r : [];

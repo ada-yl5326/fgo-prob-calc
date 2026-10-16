@@ -823,6 +823,16 @@ body.dragging, body.dragging * { cursor: grabbing !important; user-select: none;
 .sd-roles { display: flex; width: 100%; margin-bottom: 8px; }
 .sd-roles button { flex: 1; padding: 6px 4px; font-size: 13px; }
 .sd-counts { margin: 4px 0 0; }
+.sd-head-toggles { display: flex; gap: 6px; }
+.sd-hit { padding: 6px 0; }
+.sd-hit + .sd-hit { border-top: 1px dotted var(--border); }
+.sd-hit > .seg { display: flex; margin-bottom: 6px; }
+.sd-hit > .seg button { flex: 1; padding: 6px 4px; font-size: 13px; }
+.sd-hit-n { display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: 8px; }
+.sd-hit-n .seg { margin-top: 21px; }
+.sd-hit-n .seg button { padding: 6px 8px; font-size: 13px; }
+.sd-hit-n .aoe-remove { margin-top: 24px; }
+.sd-hit-add { margin-top: 4px; padding: 4px 12px; font-size: 13px; }
 .sd-check { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 13px; color: var(--muted); }
 #sendServants { margin-top: 10px; }
 #sendEnemyAdd { margin-top: 2px; }

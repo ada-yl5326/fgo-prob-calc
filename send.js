@@ -6,7 +6,7 @@
  *
  * 精确计算（compute）：按行动一步一步展开全部分支，状态相同的合并。
  *     状态 = 每个敌人执行到预设序列的第几个 + 每名会倒下的从者（是否退场、用了几次战续、剩几次无敌、
- *            「对谁不合法」、这一条命挨过哪几下攻击）+ 是否已中断。
+ *            「对谁不合法」、这一条命挨过哪几下攻击）+ 是否已中断 + 设了受击要求的从者各条要求已经挨了几下。
  *     一名从者这一条命挨过的攻击（各下的均伤，见 hitAvg）决定了他此时已经倒下的概率
  *         F(挨过的攻击) = 这几下伤害之和 >= HP 的概率（击破概率页的精确计数，全部 200^n 种随机数组合），
  *     挨下一下 x 时：倒下的概率 = (F(挨过的 + x) − F(挨过的)) / (1 − F(挨过的))，否则还站着。
@@ -27,13 +27,17 @@
   var COLORS = { B: 1.5, A: 1, Q: 0.8 };
   var DECKS = ['BBBAQ', 'BBAAQ', 'BBAQQ', 'BAAQQ', 'BAAAQ', 'BAQQQ'];
   var ROLES = ['must', 'may', 'keep', 'immortal'];       // 要退场 / 可以退场 / 不能退场 / 不会死
+  // 受击要求：类型 B / A / Q / 普通 / 宝具；暴击 不限 / 暴击 / 不暴击（宝具没有暴击）；次数 至少 / 恰好 / 至多
+  var HIT_TYPES = ['B', 'A', 'Q', 'N', 'NP'], HIT_CRIT = ['any', 'yes', 'no'], HIT_CMP = ['ge', 'eq', 'le'];
+  var MAX_HIT_ROWS = 6, MAX_HITS = MAX_ENEMIES * MAX_ACTIONS;
 
   /**
    * 检查并整理输入。cfg = {
    *   enemies: [{ actions, normal: { dmg, aoe }, crit: null | { dmg, rate, aoe }, skill: 开技能概率 (0 ~ 1),
    *               deck: null | 'BBAAQ', np: null | { at: [第几个预设动作，1 起], dmg: 0 = 无伤害宝具, aoe },
    *               mult: [对每名从者的伤害倍率 %，默认 100] }]（按行动顺序）,
-   *   servants: [{ role, hp, inv, guts: [每次战续的血量], taunt, weight }],
+   *   servants: [{ role, hp, inv, guts: [每次战续的血量], taunt, weight,
+   *                hits: [受击要求 { type: 'B' | 'A' | 'Q' | 'N' 普通 | 'NP' 宝具, crit: 'any' | 'yes' | 'no', cmp: 'ge' | 'eq' | 'le', n }] }],
    *   backup: 有后备队友（默认 true）
    * }
    * 返回内部模型；输入有误时抛出 Error（message 是给用户看的说明）。
@@ -52,10 +56,23 @@
       var inv = mortal ? Math.round(num(s.inv || 0, 0, MAX_INV, name + '的无敌次数')) : 0;
       var weight = num(s.weight === undefined ? 1 : s.weight, 0, 1e9, name + '的被攻击权重');
       if (!(weight > 0)) throw new Error(name + '的被攻击权重要大于 0');
-      return { role: s.role, mortal: mortal, hps: [hp].concat(guts), inv: inv, taunt: !!s.taunt, weight: weight };
+      var hits = (s.hits || []).map(function (h, k) {
+        var what = name + '受击要求第 ' + (k + 1) + ' 条';
+        h = h || {};
+        var crit = h.type === 'NP' ? 'any' : h.crit || 'any';
+        if (HIT_TYPES.indexOf(h.type) < 0 || HIT_CMP.indexOf(h.cmp) < 0 || HIT_CRIT.indexOf(crit) < 0) throw new Error(what + '有误');
+        var n = num(h.n, 0, MAX_HITS, what + '的次数');
+        if (n !== Math.round(n)) throw new Error(what + '的次数要是整数');
+        // 计数到 cap 就不再往上加：至少 n 次时到 n 就够了；恰好 / 至多 n 次时 n + 1 = 已经超过
+        return { type: h.type, crit: crit, cmp: h.cmp, n: n, cap: h.cmp === 'ge' ? n : n + 1 };
+      });
+      if (hits.length > MAX_HIT_ROWS) throw new Error(name + '的受击要求最多 ' + MAX_HIT_ROWS + ' 条');
+      return { role: s.role, mortal: mortal, hps: [hp].concat(guts), inv: inv, taunt: !!s.taunt, weight: weight, hits: hits };
     });
     // 只有「不能退场」时算的是「指定的从者都没退场」的概率
-    if (!servants.some(function (s) { return s.role === 'must' || s.role === 'keep'; })) throw new Error('至少要有一名「要退场」或「不能退场」的从者');
+    if (!servants.some(function (s) { return s.role === 'must' || s.role === 'keep' || s.hits.length; })) {
+      throw new Error('至少要有一名「要退场」或「不能退场」的从者，或者设置受击要求');
+    }
     var enemies = es.map(function (e, j) {
       var name = '敌人 ' + (j + 1);
       var n = Math.round(num(e.actions, 1, MAX_ACTIONS, name + '的行动次数'));
@@ -63,14 +80,14 @@
         var m = e.mult && e.mult[i] !== undefined && e.mult[i] !== null && e.mult[i] !== '' ? e.mult[i] : 100;
         return num(m, 0, 1e6, name + '对从者 ' + (i + 1) + ' 的伤害倍率');
       });
-      var colors = e.deck ? deckColors(e.deck, name) : [{ card: 1, p: 1 }];
+      var colors = e.deck ? deckColors(e.deck, name) : [{ card: 1, p: 1, color: null }];   // 没开牌型：攻击没有颜色
       var skill = num(e.skill || 0, 0, 1, name + '的开技能概率');
       var normal = num(e.normal && e.normal.dmg, 0, 1e12, name + '的普通攻击均伤');
       var kinds = [], crit = e.crit ? num(e.crit.rate, 0, 1, name + '的暴击率') : 0;
       colors.forEach(function (c) {
-        if (crit < 1) kinds.push({ p: c.p * (1 - crit), dmg: normal, card: c.card, aoe: !!e.normal.aoe, np: false, crit: false });
+        if (crit < 1) kinds.push({ p: c.p * (1 - crit), dmg: normal, card: c.card, color: c.color, aoe: !!e.normal.aoe, np: false, crit: false });
         if (crit > 0) {
-          kinds.push({ p: c.p * crit, dmg: num(e.crit.dmg, 0, 1e12, name + '的暴击均伤'), card: c.card, aoe: !!e.crit.aoe, np: false, crit: true });
+          kinds.push({ p: c.p * crit, dmg: num(e.crit.dmg, 0, 1e12, name + '的暴击均伤'), card: c.card, color: c.color, aoe: !!e.crit.aoe, np: false, crit: true });
         }
       });
       var presets = [];
@@ -82,13 +99,20 @@
           if (a >= 1 && a <= n) presets[a - 1] = true;
         });
         var d = num(e.np.dmg || 0, 0, 1e12, name + '的宝具均伤');
-        npKind = { p: 1, dmg: d, card: 1, aoe: !!e.np.aoe, np: true, crit: false, none: d === 0 };
+        npKind = { p: 1, dmg: d, card: 1, color: null, aoe: !!e.np.aoe, np: true, crit: false, none: d === 0 };
       }
       var lastNP = presets.lastIndexOf(true);
       var all = npKind ? kinds.concat([npKind]) : kinds.slice();
-      all.forEach(function (k, idx) { k.idx = idx; });
-      return { actions: n, presets: presets, lastNP: lastNP, kinds: kinds, npKind: npKind, all: all, skill: skill, mult: mult };
+      all.forEach(function (k, idx) {
+        k.idx = idx;
+        k.hitRows = servants.map(function (sv) { return hitRows(sv.hits, k); });   // 这种攻击打到从者 i 时可能计入他的哪几条受击要求
+      });
+      return { deck: !!e.deck, actions: n, presets: presets, lastNP: lastNP, kinds: kinds, npKind: npKind, all: all, skill: skill, mult: mult };
     });
+    if (!enemies.some(function (e) { return e.deck; }) &&
+        servants.some(function (s) { return s.hits.some(function (h) { return 'BAQ'.indexOf(h.type) >= 0; }); })) {
+      throw new Error('没有敌人开牌型，受击要求不能指定 B / A / Q');
+    }
     // 行动顺序：按顺序轮流，行动次数用完的跳过
     var slots = [], left = enemies.map(function (e) { return e.actions; });
     for (var any = true; any;) {
@@ -114,9 +138,43 @@
     var out = [];
     ['B', 'A', 'Q'].forEach(function (c) {
       var k = deck.split(c).length - 1;
-      if (k) out.push({ card: COLORS[c], p: k / 5 });
+      if (k) out.push({ card: COLORS[c], p: k / 5, color: c });
     });
     return out;
+  }
+
+  /**
+   * 一下攻击对得上哪几条受击要求（条目的序号）：{ sp: 特殊条目, nr: 「普通」条目 }。
+   * 宝具只对得上「宝具」条目；普通攻击对得上颜色、暴击都对上的 B / A / Q 条目，以及暴击对上的「普通」条目
+   * （没开牌型的攻击没有颜色，只对得上「普通」）。实际计入哪几条见 countRows。
+   */
+  function hitRows(rows, kind) {
+    var sp = [], nr = [];
+    var critOk = function (h) { return h.crit === 'any' || (h.crit === 'yes') === kind.crit; };
+    rows.forEach(function (h, r) {
+      if (kind.np ? h.type === 'NP' : h.type === kind.color && critOk(h)) sp.push(r);
+      else if (!kind.np && h.type === 'N' && critOk(h)) nr.push(r);
+    });
+    return { sp: sp, nr: nr, any: sp.length + nr.length > 0 };
+  }
+
+  /**
+   * 挨这一下之前各条已挨的次数 c → 这一下计入哪几条：对上的特殊条目都计入；
+   * 对上的特殊条目里有还没满足的「至少 / 恰好」条目时，先满足特殊条目，不计入「普通」，否则也计入「普通」
+   * （「至多」条目一开始就算满足，不会挡住「普通」）
+   */
+  function countRows(sv, m, c) {
+    var block = false;
+    for (var k = 0; k < m.sp.length; k++) {
+      var h = sv.hits[m.sp[k]];
+      if (h.cmp !== 'le' && c[m.sp[k]] < h.n) block = true;
+    }
+    return block ? m.sp : m.sp.concat(m.nr);
+  }
+
+  /** 各条受击要求挨的次数 c[r] 是否都符合 */
+  function hitsOk(sv, c) {
+    return sv.hits.every(function (h, r) { return h.cmp === 'ge' ? c[r] >= h.n : h.cmp === 'eq' ? c[r] === h.n : c[r] <= h.n; });
   }
 
   /** 敌人 j 的这种攻击打到从者 i 时的均伤（单次伤害 = 向下取整(均伤 × 随机数)，与我方单卡伤害算法相同） */
@@ -200,7 +258,8 @@
 
   /*
    * 状态存成一个整数数组：[敌人 0 … E−1 执行到预设序列的第几个, 中断（0 没有 / 1 战续中断 / 2 嘲讽中断）,
-   *                       每名从者 5 格：退场?, 用了几次战续, 剩几次无敌, 对第几个敌人不合法（−1 = 没有）, 挨过的攻击]。
+   *                       每名从者 5 格：退场?, 用了几次战续, 剩几次无敌, 对第几个敌人不合法（−1 = 没有）, 挨过的攻击,
+   *                       设了受击要求的从者各 1 + 条数 格：已经不符合?, 各条挨了几下（到 cap 为止；不符合后都记 0，便于合并）]。
    * 「挨过的攻击」是一棵树上的节点（每名从者每一条命一棵）：节点 = 这条命挨过的几下攻击（不分先后），记着已倒下的概率 F；
    * 树枝 = 再挨一下某种攻击，记着这一下倒下的概率。
    */
@@ -228,7 +287,32 @@
     this.trees = m.servants.map(function (sv) {
       return sv.hps.map(function (H) { return { H: H, nodes: [{ F: 0, ids: [] }], byKey: new Map([['', 0]]), edges: new Map() }; });
     });
+    this.svEnd = this.E + 1 + SV * m.servants.length;    // 受击计数从这里开始
+    var at = this.svEnd;
+    this.cOff = m.servants.map(function (sv) { if (!sv.hits.length) return -1; var o = at; at += 1 + sv.hits.length; return o; });
+    this.size = at;
   }
+
+  /** 从者 i 挨了敌人 j 的一下 kind（被无敌挡掉、无伤害也算）：计入受击要求 */
+  Exact.prototype.countHit = function (s, j, kind, i) {
+    var m = kind.hitRows[i], o = this.cOff[i];
+    if (!m.any || s[o]) return;
+    var sv = this.m.servants[i], hs = sv.hits, bad = false;
+    var rows = countRows(sv, m, s.slice(o + 1, o + 1 + hs.length));
+    for (var k = 0; k < rows.length; k++) {
+      var r = rows[k], h = hs[r], c = Math.min(h.cap, s[o + 1 + r] + 1);
+      s[o + 1 + r] = c;
+      if (h.cmp !== 'ge' && c > h.n) bad = true;
+    }
+    if (bad) { s[o] = 1; for (k = 0; k < hs.length; k++) s[o + 1 + k] = 0; }
+  };
+
+  /** 结束时从者 i 的受击要求是否符合（没设时 true） */
+  Exact.prototype.hitPass = function (s, i) {
+    var sv = this.m.servants[i], o = this.cOff[i];
+    if (o < 0) return true;
+    return !s[o] && hitsOk(sv, s.slice(o + 1, o + 1 + sv.hits.length));
+  };
 
   /** 从者 i 第 life 条命、挨过 node 的情况下再挨一下 x：{ child, down: 这一下倒下的概率 } */
   Exact.prototype.edge = function (i, life, node, x) {
@@ -271,7 +355,9 @@
     this.clearBans(base);
     for (n = 0; n < targets.length; n++) {
       var i = targets[n], o = E + 1 + SV * i, hid = ids[i];
-      if (hid === -2 || base[o + DEAD]) continue;        // 不会死的从者、无伤害宝具
+      if (base[o + DEAD]) continue;
+      this.countHit(base, j, kind, i);
+      if (hid === -2) continue;                          // 不会死的从者、无伤害宝具
       if (base[o + INV] > 0) { base[o + INV]--; continue; }
       if (hid === -1) continue;                          // 伤害倍率 0%
       off.push(o);
@@ -342,14 +428,15 @@
     return s;
   };
 
-  /** 状态合并用的键：预设位置（每个 3 位）和中断合成 2 个字符，每名从者 2 个字符（节点编号太大时 4 个） */
-  var keyBuf = new Uint16Array(64);
-  function flatKey(s, E) {
-    var head = s[E], n = 0;
+  /** 状态合并用的键：预设位置（每个 3 位）和中断合成 2 个字符，每名从者 2 个字符（节点编号太大时 4 个），受击计数每格 1 个字符 */
+  var keyBuf = new Uint16Array(80);
+  function flatKey(s, E, svEnd) {
+    var head = s[E], n = 0, o;
     for (var j = 0; j < E; j++) head = head * 8 + s[j];
     keyBuf[n++] = head & 0xffff;
     keyBuf[n++] = head >>> 16;
-    for (var o = E + 1; o < s.length; o += SV) {
+    for (o = svEnd; o < s.length; o++) keyBuf[n++] = s[o];
+    for (o = E + 1; o < svEnd; o += SV) {
       keyBuf[n++] = s[o] | s[o + 1] << 1 | s[o + 2] << 5 | (s[o + 3] + 1) << 9;
       var node = s[o + 4];
       if (node < 0xffff) keyBuf[n++] = node;
@@ -359,8 +446,8 @@
   }
 
   /**
-   * 精确计算。返回 { exact: true, success, fail, mustAlive, keepDead, endGuts, endTaunt,
-   *                 servants: [{ out: 退场概率, guts: 触发过战续的概率 }], states: 最多时的状态数 }；
+   * 精确计算。返回 { exact: true, success, fail, mustAlive, keepDead, hitBad: 受击要求不符, endGuts, endTaunt,
+   *                 servants: [{ out: 退场概率, guts: 触发过战续的概率, hitOk: 受击要求符合的概率 }], states: 最多时的状态数 }；
    * 分支数超过 maxWork 或状态数超过 maxStates 时返回 null。
    */
   function compute(cfg, opts) {
@@ -368,6 +455,7 @@
     var X = new Exact(m), E = X.E;
     var s0 = m.enemies.map(function () { return 0; }).concat([0]);
     m.servants.forEach(function (sv) { s0.push(0, 0, sv.inv, -1, 0); });
+    while (s0.length < X.size) s0.push(0);
     var cur = new Map(), peak = 1, t, base = 0, next, work = 0, over = false;
     var emit = function (p, s) {
       if (++work + X.dmg.ops / 1000 > maxWork) over = true;   // 计数的 1000 次加法约等于展开一个分支
@@ -375,10 +463,10 @@
       p *= base;
       if (!(p > 0)) return;
       X.canon(s, t);
-      var k = flatKey(s, E), v = next.get(k);
+      var k = flatKey(s, E, X.svEnd), v = next.get(k);
       if (v) v.p += p; else next.set(k, { s: s, p: p });
     };
-    cur.set(flatKey(s0, E), { s: s0, p: 1 });
+    cur.set(flatKey(s0, E, X.svEnd), { s: s0, p: 1 });
     for (t = 0; t < m.slots.length; t++) {
       next = new Map();
       cur.forEach(function (v) {
@@ -400,6 +488,7 @@
           var o = E + 1 + SV * i;
           return sv.mortal ? { dead: !!s[o + DEAD], life: s[o + LIFE] } : null;
         }),
+        hit: m.servants.map(function (sv, i) { return X.hitPass(s, i); }),
       }, v.p);
     });
     res.exact = true;
@@ -410,28 +499,30 @@
 
   // ---------------------------------------------------------------- 模拟（与精确计算分开实现同一套规则，测试时互相对照）
 
-  /** 结束时的一个状态计入结果：s = { end, sv: [{ dead, life } | null] } */
+  /** 结束时的一个状态计入结果：s = { end, sv: [{ dead, life } | null], hit: [受击要求符合?] } */
   function tally(m, res, s, p) {
-    var mustAlive = false, keepDead = false;
+    var mustAlive = false, keepDead = false, hitBad = false;
     m.servants.forEach(function (sv, i) {
       var x = s.sv[i];
+      if (sv.hits.length) { if (s.hit[i]) res.servants[i].hitOk += p; else hitBad = true; }
       if (!x) return;
       if (x.dead) res.servants[i].out += p;
       if (x.life > 0) res.servants[i].guts += p;
       if (sv.role === 'must' && !x.dead) mustAlive = true;
       if (sv.role === 'keep' && x.dead) keepDead = true;
     });
-    if (mustAlive || keepDead) res.fail += p; else res.success += p;
+    if (mustAlive || keepDead || hitBad) res.fail += p; else res.success += p;
     if (mustAlive) res.mustAlive += p;
     if (keepDead) res.keepDead += p;
+    if (hitBad) res.hitBad += p;
     if (s.end === 'guts') res.endGuts += p;
     if (s.end === 'taunt') res.endTaunt += p;
   }
 
   function emptyResult(m) {
     return {
-      success: 0, fail: 0, mustAlive: 0, keepDead: 0, endGuts: 0, endTaunt: 0,
-      servants: m.servants.map(function () { return { out: 0, guts: 0 }; }),
+      success: 0, fail: 0, mustAlive: 0, keepDead: 0, hitBad: 0, endGuts: 0, endTaunt: 0,
+      servants: m.servants.map(function () { return { out: 0, guts: 0, hitOk: 0 }; }),
     };
   }
 
@@ -456,10 +547,11 @@
     var dead = new Uint8Array(N), life = new Int32Array(N), inv = new Int32Array(N), ban = new Int32Array(N);
     var taken = new Float64Array(N), q = new Int32Array(E), legal = new Int32Array(N), targets = new Int32Array(N);
     var cross = new Int32Array(N), revived = new Int32Array(N);
-    var sv = m.servants.map(function () { return { dead: false, life: 0 }; }), state = { end: null, sv: [] };
+    var hc = m.servants.map(function (s) { return new Int32Array(s.hits.length); });   // 各条受击要求挨了几下
+    var sv = m.servants.map(function () { return { dead: false, life: 0 }; }), state = { end: null, sv: [], hit: [] };
     for (var n = 0; n < runs; n++) {
       var end = 0;
-      for (i = 0; i < N; i++) { dead[i] = 0; life[i] = 0; inv[i] = m.servants[i].inv; ban[i] = -1; taken[i] = 0; }
+      for (i = 0; i < N; i++) { dead[i] = 0; life[i] = 0; inv[i] = m.servants[i].inv; ban[i] = -1; taken[i] = 0; hc[i].fill(0); }
       for (k = 0; k < E; k++) q[k] = 0;
       for (var t = 0; t < T && !end; t++) {
         var j = m.slots[t], e = m.enemies[j], qi = q[j], isNP = e.presets[qi];
@@ -490,7 +582,12 @@
         var nc = 0, ids = outs[j][kind.idx];
         for (k = 0; k < na; k++) {
           i = targets[k];
-          if (!ids[i] || dead[i]) continue;
+          if (dead[i]) continue;
+          if (kind.hitRows[i].any) {
+            var hr = countRows(m.servants[i], kind.hitRows[i], hc[i]);
+            for (var r2 = 0; r2 < hr.length; r2++) hc[i][hr[r2]]++;
+          }
+          if (!ids[i]) continue;
           if (inv[i] > 0) { inv[i]--; continue; }
           taken[i] += ids[i][Math.floor(rand() * R)];
           if (taken[i] >= hps[i][life[i]]) { cross[nc++] = i; taken[i] = 0; }
@@ -511,7 +608,10 @@
           if (!standing) end = 2;
         }
       }
-      for (i = 0; i < N; i++) { sv[i].dead = !!dead[i]; sv[i].life = life[i]; state.sv[i] = mortal[i] ? sv[i] : null; }
+      for (i = 0; i < N; i++) {
+        sv[i].dead = !!dead[i]; sv[i].life = life[i]; state.sv[i] = mortal[i] ? sv[i] : null;
+        state.hit[i] = hitsOk(m.servants[i], hc[i]);
+      }
       state.end = end === 1 ? 'guts' : end === 2 ? 'taunt' : null;
       tally(m, res, state, 1);
     }
@@ -522,8 +622,8 @@
   }
 
   function scale(res, k) {
-    ['success', 'fail', 'mustAlive', 'keepDead', 'endGuts', 'endTaunt'].forEach(function (f) { res[f] *= k; });
-    res.servants.forEach(function (x) { x.out *= k; x.guts *= k; });
+    ['success', 'fail', 'mustAlive', 'keepDead', 'hitBad', 'endGuts', 'endTaunt'].forEach(function (f) { res[f] *= k; });
+    res.servants.forEach(function (x) { x.out *= k; x.guts *= k; x.hitOk *= k; });
   }
 
   /** 精确计算；计算量太大时改用模拟（默认模拟 SIM_ACTIONS ÷ 行动数 次，至少 5 万次、最多 SIM_RUNS 次） */
@@ -538,6 +638,7 @@
   var api = {
     MAX_ENEMIES: MAX_ENEMIES, MAX_ACTIONS: MAX_ACTIONS, MAX_SERVANTS: MAX_SERVANTS, MAX_INV: MAX_INV, MAX_GUTS: MAX_GUTS,
     MAX_STATES: MAX_STATES, MAX_WORK: MAX_WORK, SIM_RUNS: SIM_RUNS, DECKS: DECKS, ROLES: ROLES,
+    HIT_TYPES: HIT_TYPES, HIT_CRIT: HIT_CRIT, HIT_CMP: HIT_CMP, MAX_HIT_ROWS: MAX_HIT_ROWS, MAX_HITS: MAX_HITS,
     model: model, compute: compute, simulate: simulate, run: run, withSL: KP.withSL,
   };
   if (typeof module === 'object' && module.exports) module.exports = api;

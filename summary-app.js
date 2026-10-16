@@ -104,12 +104,12 @@
     const out = [];
     if (!compact) out.push({ t: 'head', title: '送人概率', sub: g.name });
     else out.push({ t: 'section', text: '送人组「' + g.name + '」' });
-    const hasMust = d.servants.some((s) => s.role === 'must');
+    const label = Send.resultLabel(d);
     if (r.status === 'ok' && !compact) {
       const notes = [];
       if (r.sl) notes.push('单次 ' + pct(r.single) + '，SL ' + r.sl + ' 次');
       if (!r.result.exact) notes.push('模拟值（设置太复杂，改为模拟 ' + r.result.runs.toLocaleString('en-US') + ' 次）');
-      out.push({ t: 'big', label: hasMust ? '送人成功率' : '不退场的概率', value: pct(r.final), notes });
+      out.push({ t: 'big', label, value: pct(r.final), notes });
     }
     const enemies = d.enemies.map((e, j) => {
       const extra = [];
@@ -127,10 +127,11 @@
       if (s.taunt) extra.push('嘲讽');
       if (s.role !== 'immortal' && s.inv) extra.push('无敌 ' + s.inv);
       if (s.role !== 'immortal' && s.guts) extra.push('战续 ' + s.guts + '（' + (s.gutsEach ? s.gutsHp.map(blank).join(' / ') : blank(s.gutsHp[0])) + '）');
+      if (s.hits.on) extra.push('受击：' + s.hits.rows.map(Send.hitText).join('，'));
       return [String(i + 1), ROLE[s.role], s.role === 'immortal' ? '—' : blank(s.hp), num(s.weight) || '1', extra.join('；') || '—'];
     });
     out.push({ t: 'table', title: '我方（' + (d.backup ? '有' : '没有') + '后备队友）', head: ['从者', '角色', 'HP', '权重', '其他'], rows: servants });
-    if (compact) out.push({ t: 'kv', rows: [[hasMust ? '送人成功率' : '不退场的概率', r.status === 'ok' ? pct(r.single) + '（不含 SL）' : r.message || '计算中']] });
+    if (compact) out.push({ t: 'kv', rows: [[label, r.status === 'ok' ? pct(r.single) + '（不含 SL）' : r.message || '计算中']] });
     else if (r.status !== 'ok') out.push({ t: 'note', text: r.message || '还在计算' });
     return out;
   }

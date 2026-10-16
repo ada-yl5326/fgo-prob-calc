@@ -62,8 +62,12 @@
     return ['kill', 'split', 'send', 'buff', 'ebuff', 'kfail', 'sfail', 'extra'].some((k) => any(c[k])) || (c.deal || []).length > 0 || !!c.global;
   }
 
-  /** 比较用：以前保存的工作目录没有送人组（v0.8 以前）、buff 组（v0.9 以前），当作只有一个空白的组；各项按固定顺序排列 */
-  const canon = (d) => ({ kill: d.kill, deal: d.deal, send: d.send || blank().send, buff: d.buff || blank().buff, combo: d.combo });
+  /**
+   * 比较用：以前保存的工作目录没有送人组（v0.8 以前）、buff 组（v0.9 以前），当作只有一个空白的组；
+   * 送人组按送人页的整理补上以后加的项（v1.0 以前从者没有受击要求）；各项按固定顺序排列
+   */
+  const canonSend = (x) => ({ ...x, groups: x.groups.map((g) => ({ ...g, data: Send.cleanData(g.data) || g.data })) });
+  const canon = (d) => ({ kill: d.kill, deal: d.deal, send: canonSend(d.send || blank().send), buff: d.buff || blank().buff, combo: d.combo });
 
   /** 和新的空白工作目录一样（没有任何输入）；第一次打开网页时发牌页自带的示例（BBAAQ 第 1 回合要 BB）也算空白 */
   function isBlank(d) {

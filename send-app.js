@@ -14,6 +14,10 @@
   const ORDINAL = ['1st', '2nd', '3rd', '4th', '5th', '6th'];
   const ROLES = [['must', '要退场'], ['may', '可以退场'], ['keep', '不能退场'], ['immortal', '不会死']];
   const ROLE_NAME = Object.fromEntries(ROLES);
+  const HIT_TYPES = [['B', 'B'], ['A', 'A'], ['Q', 'Q'], ['N', '普通'], ['NP', '宝具']];
+  const HIT_CRIT = [['any', '不限'], ['yes', '暴击'], ['no', '不暴击']];
+  const HIT_CMP = [['ge', '至少'], ['eq', '恰好'], ['le', '至多']];
+  const HIT_NAME = Object.fromEntries(HIT_TYPES), CRIT_NAME = Object.fromEntries(HIT_CRIT), CMP_NAME = Object.fromEntries(HIT_CMP);
   const SLOW_MS = 150;                                   // 超过这么久还没算完才显示「计算中」
 
   const intFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
@@ -64,8 +68,12 @@
     };
   }
 
+  function newHitRow() {
+    return { type: 'N', crit: 'any', cmp: 'ge', n: '' };
+  }
+
   function newServant(role) {
-    return { role, hp: '', weight: '', taunt: false, inv: 0, guts: 0, gutsHp: [''], gutsEach: false };
+    return { role, hp: '', weight: '', taunt: false, inv: 0, guts: 0, gutsHp: [''], gutsEach: false, hits: { on: false, rows: [newHitRow()] } };
   }
 
   function create() {
@@ -99,9 +107,15 @@
       const guts = int(s.guts, 0, S.MAX_GUTS, 0);
       const hps = (Array.isArray(s.gutsHp) ? s.gutsHp : []).map(str);
       while (hps.length < Math.max(1, guts)) hps.push('');
+      const hi = obj(s.hits), pick = (v, list, d) => (list.some(([k]) => k === v) ? v : d);
+      const rows = (Array.isArray(hi.rows) ? hi.rows : []).slice(0, S.MAX_HIT_ROWS).map((r) => {
+        r = obj(r);
+        return { type: pick(r.type, HIT_TYPES, 'N'), crit: pick(r.crit, HIT_CRIT, 'any'), cmp: pick(r.cmp, HIT_CMP, 'ge'), n: str(r.n) };
+      });
       return {
         role: ROLE_NAME[s.role] ? s.role : 'must', hp: str(s.hp), weight: str(s.weight), taunt: bool(s.taunt, false),
         inv: int(s.inv, 0, S.MAX_INV, 0), guts, gutsHp: hps.slice(0, Math.max(1, guts)), gutsEach: bool(s.gutsEach, false),
+        hits: { on: bool(hi.on, false), rows: rows.length ? rows : [newHitRow()] },
       };
     });
     if (!enemies.length || !servants.length) return null;
@@ -114,8 +128,11 @@
     create, clean: cleanData,
   });
 
+  /** 只看受击要求：有从者开了受击要求，并且没有「要退场」「不能退场」的从者。这时敌方均伤、我方 HP 可以不填 */
+  const hitOnly = (d) => d.servants.some((s) => s.hits.on) && !d.servants.some((s) => s.role === 'must' || s.role === 'keep');
+
   /**
-   * 送人组 → 计算核心的输入。返回 { status: 'ok', cfg, sl } 或 { status: 'idle' | 'error', message }，
+   * 送人组 → 计算核心的输入。只看受击要求时：均伤不填 = 0（没有伤害），「可以退场」的从者 HP 不填 = 不会退场。返回 { status: 'ok', cfg, sl } 或 { status: 'idle' | 'error', message }，
    * 另有 errors（输入框的 data-path → 错误说明）。
    */
   function build(d) {
@@ -135,11 +152,25 @@
       if (opts.min !== undefined && r.value < opts.min) { errors[path] = opts.minText || '太小了'; return null; }
       return r.value;
     }
+    const anyDeck = d.enemies.some((e) => e.deck.on), only = hitOnly(d);
     const servants = d.servants.map((s, i) => {
       const p = 'servants.' + i + '.', name = '从者 ' + (i + 1);
       const out = { role: s.role, taunt: s.taunt, weight: num(p + 'weight', s.weight, '', { def: 1 }) };
+      if (s.hits.on) {
+        out.hits = s.hits.rows.map((r, k) => {
+          const path = p + 'hits.rows.' + k + '.n';
+          if (!anyDeck && 'BAQ'.indexOf(r.type) >= 0) { errors[path] = '没有敌人开牌型，请改选普通或宝具'; return null; }
+          const t = normalize(r.n);
+          if (t === '') { need(name + '的受击次数'); return null; }
+          typed = true;
+          if (!/^\d+$/.test(t)) { errors[path] = '请输入整数'; return null; }
+          if (Number(t) > S.MAX_HITS) { errors[path] = '最多 ' + S.MAX_HITS + ' 次'; return null; }
+          return { type: r.type, crit: r.type === 'NP' ? 'any' : r.crit, cmp: r.cmp, n: Number(t) };
+        });
+      }
       if (out.weight !== null && !(out.weight > 0)) { errors[p + 'weight'] = '要大于 0'; out.weight = null; }
-      if (s.role !== 'immortal') {
+      if (only && s.role === 'may' && parse(s.hp).empty) out.role = 'immortal';
+      else if (s.role !== 'immortal') {
         out.hp = num(p + 'hp', s.hp, name + '的 HP', { required: true, min: 1, minText: '至少 1' });
         out.inv = s.inv;
         out.guts = [];
@@ -154,12 +185,12 @@
       const p = 'enemies.' + j + '.', name = '敌人 ' + (j + 1);
       const out = {
         actions: e.actions,
-        normal: { dmg: num(p + 'normal.dmg', e.normal.dmg, name + '的普通攻击均伤', { required: true }), aoe: e.normal.aoe },
+        normal: { dmg: num(p + 'normal.dmg', e.normal.dmg, name + '的普通攻击均伤', only ? { def: 0 } : { required: true }), aoe: e.normal.aoe },
         crit: null, np: null, deck: e.deck.on ? e.deck.value : null, skill: 0,
         mult: d.servants.map((s, i) => (e.mult.on ? num(p + 'mult.values.' + i, e.mult.values[i], '', { def: 100, pct: false }) : 100)),
       };
       if (e.crit.on) {
-        out.crit = { dmg: num(p + 'crit.dmg', e.crit.dmg, name + '的暴击均伤', { required: true }),
+        out.crit = { dmg: num(p + 'crit.dmg', e.crit.dmg, name + '的暴击均伤', only ? { def: 0 } : { required: true }),
           rate: num(p + 'crit.rate', e.crit.rate, name + '的暴击率', { required: true, pct: true }), aoe: e.crit.aoe };
       }
       if (e.np.on) {
@@ -175,8 +206,8 @@
     if (Object.keys(errors).length) return Object.assign(res, { status: 'error', message: '请检查标红的输入' });
     if (!typed) return Object.assign(res, { status: 'idle', message: '输入敌方均伤和我方 HP 后自动计算' });
     if (missing) return Object.assign(res, { status: 'idle', message: '还要填：' + missing });
-    if (!d.servants.some((s) => s.role === 'must' || s.role === 'keep')) {
-      return Object.assign(res, { status: 'idle', message: '至少要有一名「要退场」或「不能退场」的从者' });
+    if (!d.servants.some((s) => s.role === 'must' || s.role === 'keep' || s.hits.on)) {
+      return Object.assign(res, { status: 'idle', message: '至少要有一名「要退场」或「不能退场」的从者，或者设置受击要求' });
     }
     const cfg = { enemies, servants, backup: d.backup };
     try { S.model(cfg); } catch (e) { return Object.assign(res, { status: 'error', message: e.message }); }
@@ -363,10 +394,37 @@
     return h + '</div>';
   }
 
-  function servantHtml(s, i) {
+  /** 一排选项按钮（value → 文字） */
+  function seg(path, cur, list, cls) {
+    return '<div class="seg ' + cls + '">' + list.map(([v, t]) =>
+      '<button type="button" data-act="set" data-path="' + path + '" data-value="' + v + '" class="' + (cur === v ? 'on' : '') + '" aria-pressed="' + (cur === v) + '">' +
+      ('BAQ'.indexOf(v) >= 0 && v.length === 1 ? letter(v) : t) + '</button>').join('') + '</div>';
+  }
+
+  /** 受击要求：每条 = 类型 + 暴击（宝具没有）+ 至少 / 恰好 / 至多 + 次数 */
+  function hitsHtml(s, i, anyDeck) {
+    const p = 'servants.' + i + '.hits.', rows = s.hits.rows;
+    // 没有敌人开牌型时只显示普通、宝具（这一条已经选了 B / A / Q 时也显示它，并提示改选）
+    const types = (r) => (anyDeck ? HIT_TYPES : HIT_TYPES.filter(([v]) => 'BAQ'.indexOf(v) < 0 || r.type === v));
+    return '<div class="sd-sub"><div class="sd-sub-title">受击要求 <span class="panel-sub">每条都要满足才算成功；被无敌挡掉、全体攻击打到也算一次；' +
+      '先满足 B / A / Q 条目，满足以后多出来的也计入「普通」' + (anyDeck ? '' : '；没有敌人开牌型时只能选普通、宝具') + '</span></div>' +
+      rows.map((r, k) => {
+        const q = p + 'rows.' + k + '.';
+        return '<div class="sd-hit">' + seg(q + 'type', r.type, types(r), 'sd-hit-type') +
+          (r.type === 'NP' ? '' : seg(q + 'crit', r.crit, HIT_CRIT, 'sd-hit-crit')) +
+          '<div class="sd-hit-n">' + seg(q + 'cmp', r.cmp, HIT_CMP, 'sd-hit-cmp') +
+          '<label class="field" data-field="' + q + 'n"><span class="field-name">次数</span>' + input(q + 'n', r.n, '次数', 'numeric') + '<span class="field-hint"></span></label>' +
+          (rows.length > 1 ? '<button type="button" class="aoe-remove" data-act="hit-remove" data-i="' + i + '" data-k="' + k + '" aria-label="删除这条受击要求">×</button>' : '') +
+          '</div></div>';
+      }).join('') +
+      (rows.length < S.MAX_HIT_ROWS ? '<button type="button" class="sd-hit-add" data-act="hit-add" data-i="' + i + '">＋ 受击要求</button>' : '') + '</div>';
+  }
+
+  function servantHtml(s, i, anyDeck) {
     const p = 'servants.' + i + '.', mortal = s.role !== 'immortal';
     let h = '<div class="sd-card" data-servant="' + i + '">' +
-      '<div class="sd-head"><span class="sd-title">从者 ' + (i + 1) + '</span>' + toggle(p + 'taunt', s.taunt, '嘲讽') + '</div>' +
+      '<div class="sd-head"><span class="sd-title">从者 ' + (i + 1) + '</span><span class="sd-head-toggles">' + toggle(p + 'hits.on', s.hits.on, '受击要求') +
+      toggle(p + 'taunt', s.taunt, '嘲讽') + '</span></div>' +
       '<div class="seg sd-roles">' + ROLES.map(([v, t]) =>
         '<button type="button" data-act="set" data-path="' + p + 'role" data-value="' + v + '" class="' + (s.role === v ? 'on' : '') + '" aria-pressed="' + (s.role === v) + '">' + t + '</button>').join('') + '</div>' +
       '<div class="cards">' + (mortal ? field(p + 'hp', 'HP', s.hp, '剩余血量') : '') + field(p + 'weight', '被攻击权重', s.weight, '1') + '</div>';
@@ -379,6 +437,7 @@
           (s.guts > 1 ? '<label class="sd-check"><input type="checkbox" data-act="guts-each" data-i="' + i + '"' + (s.gutsEach ? ' checked' : '') + '>每次战续的血量分别填</label>' : '') + '</div>';
       }
     }
+    if (s.hits.on) h += hitsHtml(s, i, anyDeck);
     return h + '</div>';
   }
 
@@ -393,7 +452,8 @@
       b.classList.toggle('on', on);
       b.setAttribute('aria-pressed', on);
     });
-    servantBox.innerHTML = d.servants.map(servantHtml).join('');
+    const anyDeck = d.enemies.some((e) => e.deck.on);
+    servantBox.innerHTML = d.servants.map((s, i) => servantHtml(s, i, anyDeck)).join('');
     $('sendSl').value = d.sl;
     document.querySelectorAll('#viewSend input[data-path]').forEach(prettify);
   }
@@ -409,7 +469,7 @@
   const getPath = (data, path) => { const w = walk(data, path); return w.o[w.k]; };
   const setPath = (data, path, v) => { const w = walk(data, path); w.o[w.k] = v; };
 
-  const PLAIN = /(rate|weight|mult\.values\.\d)$/;      // 百分比、权重：不加千分位逗号
+  const PLAIN = /(rate|weight|mult\.values\.\d|hits\.rows\.\d\.n)$/;   // 百分比、权重、受击次数：不加千分位逗号
 
   function prettify(el) {
     if (!el.dataset.path || PLAIN.test(el.dataset.path) || el.id === 'sendSl') return;
@@ -443,6 +503,14 @@
       }
       setHint(box, text, false);
     });
+    if (hitOnly(d)) {                                    // 只看受击要求：均伤、HP 可以不填
+      document.querySelectorAll('#viewSend [data-field]').forEach((box) => {
+        const path = box.dataset.field;
+        if (b.errors[path] || !parse(getPath(d, path)).empty) return;
+        if (/(normal|crit)\.dmg$/.test(path)) setHint(box, '只看受击要求时可以不填（= 没有伤害）', false);
+        else if (/^servants\.\d\.hp$/.test(path)) setHint(box, '只看受击要求时可以不填（= 不会退场）', false);
+      });
+    }
     d.enemies.forEach((e, j) => {                        // 第 1 次行动是宝具时不会开技能
       const box = document.querySelector('#viewSend [data-field="enemies.' + j + '.skill.rate"]');
       if (box && !b.errors['enemies.' + j + '.skill.rate'] && e.np.on && e.np.at.indexOf(1) >= 0) setHint(box, '第 1 次行动是宝具，不会开技能', false);
@@ -503,10 +571,22 @@
 
   const pct = KA.formatPct, short = KA.formatShort;
 
+  /** 结果的名称：有要退场的 = 送人成功率；只设了「不能退场」= 不退场的概率；只有受击要求 = 满足受击要求的概率 */
+  function resultLabel(d) {
+    if (d.servants.some((s) => s.role === 'must')) return '送人成功率';
+    if (d.servants.some((s) => s.hits.on)) return d.servants.some((s) => s.role === 'keep') ? '成功率' : '满足受击要求的概率';
+    return '不退场的概率';
+  }
+
+  /** 一条受击要求的文字：「暴击 B 至少 2 次」「宝具 恰好 1 次」 */
+  function hitText(r) {
+    return (r.type === 'NP' || r.crit === 'any' ? '' : CRIT_NAME[r.crit] + ' ') + HIT_NAME[r.type] + ' ' + CMP_NAME[r.cmp] + ' ' + (r.n === '' ? '?' : normalize(r.n)) + ' 次';
+  }
+
   function show(r, b) {
     if (r.status !== 'ok') { showIdle(r.message); return; }
     const res = r.result, d = store.active().data;
-    const label = d.servants.some((s) => s.role === 'must') ? '送人成功率' : '不退场的概率';   // 只设了「不能退场」：都没退场的概率
+    const label = resultLabel(d);
     $('sendLabel').textContent = r.sl ? label + '（SL ' + r.sl + ' 次）' : label;
     $('sendProb').textContent = pct(r.final);
     $('sendProb').classList.remove('idle');
@@ -542,13 +622,14 @@
   }
 
   /** 单次（不含 SL）的详细结果：各从者退场、触发战续的概率，失败原因，中断 */
-  function renderDetail(res, d) {
-    const anyGuts = d.servants.some((s) => s.role !== 'immortal' && s.guts > 0);
-    let h = '<table class="sl-table sd-table"><thead><tr><th>从者</th><th>角色</th><th>退场</th>' + (anyGuts ? '<th>触发过战续</th>' : '') + '</tr></thead><tbody>';
+  function renderDetail(res, d, b) {
+    const anyGuts = d.servants.some((s) => s.role !== 'immortal' && s.guts > 0), anyHits = d.servants.some((s) => s.hits.on);
+    let h = '<table class="sl-table sd-table"><thead><tr><th>从者</th><th>角色</th><th>退场</th>' + (anyGuts ? '<th>触发过战续</th>' : '') +
+      (anyHits ? '<th>受击符合</th>' : '') + '</tr></thead><tbody>';
     d.servants.forEach((s, i) => {
-      const x = res.servants[i], mortal = s.role !== 'immortal';
+      const x = res.servants[i], mortal = b.cfg.servants[i].role !== 'immortal';
       h += '<tr><td>从者 ' + (i + 1) + (s.taunt ? '（嘲讽）' : '') + '</td><td>' + ROLE_NAME[s.role] + '</td><td>' + (mortal ? short(x.out) : '—') + '</td>' +
-        (anyGuts ? '<td>' + (mortal && s.guts ? short(x.guts) : '—') + '</td>' : '') + '</tr>';
+        (anyGuts ? '<td>' + (mortal && s.guts ? short(x.guts) : '—') + '</td>' : '') + (anyHits ? '<td>' + (s.hits.on ? short(x.hitOk) : '—') + '</td>' : '') + '</tr>';
     });
     h += '</tbody></table><ul class="sd-facts">';
     if (res.fail > 0) {
@@ -556,7 +637,8 @@
       const why = [];
       if (hasMust) why.push('要退场的没有全部退场 ' + short(res.mustAlive));
       if (hasKeep) why.push('不能退场的退场了 ' + short(res.keepDead));
-      h += '<li>失败 ' + short(res.fail) + '：' + why.join('，') + (why.length > 1 ? '（两者可能同时发生）' : '') + '</li>';
+      if (anyHits) why.push('受击次数不符 ' + short(res.hitBad));
+      h += '<li>失败 ' + short(res.fail) + '：' + why.join('，') + (why.length > 1 ? '（可能同时发生）' : '') + '</li>';
     }
     if (res.endGuts > 0) h += '<li>没有后备队友、只剩一人时被打出战续，回合中断：' + short(res.endGuts) + '</li>';
     if (res.endTaunt > 0) h += '<li>嘲讽的从者全部退场，回合中断：' + short(res.endTaunt) + '</li>';
@@ -636,6 +718,14 @@
     } else if (act === 'enemy-remove') {
       if (d.enemies.length <= 1) return;
       d.enemies.splice(Number(b.dataset.i), 1);
+    } else if (act === 'hit-add') {
+      const rows = d.servants[Number(b.dataset.i)].hits.rows;
+      if (rows.length >= S.MAX_HIT_ROWS) return;
+      rows.push(newHitRow());
+    } else if (act === 'hit-remove') {
+      const rows = d.servants[Number(b.dataset.i)].hits.rows;
+      if (rows.length <= 1) return;
+      rows.splice(Number(b.dataset.k), 1);
     } else if (act === 'enemy-add') {
       if (d.enemies.length >= S.MAX_ENEMIES) return;
       d.enemies.push(newEnemy());
@@ -667,7 +757,7 @@
   const bar = new G.GroupBar($('sendGroups'), store, { summary, onUsed: (id) => (window.ComboApp && window.ComboApp.usage ? window.ComboApp.usage('send', id) : 0) });
   document.addEventListener('sendresult', () => bar.refreshSummaries());
 
-  window.SendApp = { store, build, resultFor, summary, cleanData };
+  window.SendApp = { store, build, resultFor, summary, cleanData, resultLabel, hitText };
 
   renderForm();
   update();
