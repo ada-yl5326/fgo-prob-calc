@@ -854,3 +854,4 @@ body.dragging, body.dragging * { cursor: grabbing !important; user-select: none;
 .bf-res { margin-top: 6px; font-size: 13px; font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; }
 .bf-res:empty { display: none; }
 #buffAdd { margin-top: 2px; }
+.about a { color: var(--accent); }
