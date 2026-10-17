@@ -869,4 +869,5 @@ body.dragging, body.dragging * { cursor: grabbing !important; user-select: none;
 .lp-row { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .lp-row b { font-weight: 600; color: var(--muted); }
 .lp-problem { color: var(--danger); font-size: 12px; }
+.lp-note { color: var(--muted); font-size: 12px; }
 .lp-box .modal-actions { position: sticky; bottom: -14px; margin: 8px -16px -14px; padding: 10px 16px 14px; background: var(--surface); border-top: 1px solid var(--border); }

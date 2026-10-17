@@ -6,7 +6,8 @@
   const G = window.Groups, LS = window.LaplaceShot;
   const VENDOR = 'vendor/tesseract/';
   const MAX_PIXELS = 16e6;                               // iPhone 上 canvas 最多约 1600 万像素，再大就缩小
-  const TEXT_WIDTH = 1206;                               // 截图宽度小于约 1000 时放大后再识别（按 1206 宽的字号调好的）
+  // 每行字只允许出现的字符（kind 见 laplace-shot.js 的 readShot）
+  const WHITELIST = { hp: 'HP0123456789,-', red: 'DMGRN0123456789,.*' };
   const fmt = (n) => Math.round(n).toLocaleString('en-US');
   const esc = G.escapeHtml;
 
@@ -30,7 +31,7 @@
           workerPath: base + 'worker.min.js', corePath: base, langPath: base.replace(/\/$/, ''),
           workerBlobURL: false, cacheMethod: 'none', gzip: true,
         }))
-        .then((w) => w.setParameters({ tessedit_pageseg_mode: '6', user_defined_dpi: '300' }).then(() => w))
+        .then((w) => w.setParameters({ tessedit_pageseg_mode: '7', user_defined_dpi: '300' }).then(() => w))   // 7 = 单行文字
         .catch((e) => { engine = null; throw e; });
     }
     return engine;
@@ -57,7 +58,7 @@
     });
   }
 
-  /** 一个敌人栏（白底黑字）→ canvas；截图窄时放大 */
+  /** 一行字（白底黑字）→ canvas；字小时放大 */
   function cellCanvas(cell, scale) {
     const c = document.createElement('canvas');
     c.width = cell.width; c.height = cell.height;
@@ -84,9 +85,10 @@
       e.dims.map((d) => fmt(d.avg) + (d.random !== 0.9 ? '（RNG ' + d.random + '）' : '')).join(' / ') + '</div>';
     return '<label class="lp-turn' + (bad ? ' bad' : '') + '"><div class="lp-head">' +
       '<input type="checkbox" data-turn="' + i + '"' + (bad || !t.data ? '' : ' checked') + (t.data ? '' : ' disabled') + '>' +
-      '<span>' + esc(t.name) + '</span><span class="lp-ok">' + (bad ? '需要检查' : '血量核对无误') + '</span></div>' +
-      t.targets.map((e, k) => row(k ? 'AOE' : '主目标', e)).join('') +
-      t.problems.map((p) => '<div class="lp-problem">' + esc(p) + '</div>').join('') + '</label>';
+      '<span>' + esc(t.name) + '</span><span class="lp-ok">' + (bad ? '需要检查' : '核对无误') + '</span></div>' +
+      t.targets.map((e, k) => row((k ? 'AOE' : '主目标') + (e.life > 1 ? '（第 ' + e.life + ' 段血）' : ''), e)).join('') +
+      t.problems.map((p) => '<div class="lp-problem">' + esc(p) + '</div>').join('') +
+      (t.notes || []).map((p) => '<div class="lp-note">' + esc(p) + '</div>').join('') + '</label>';
   }
 
   function open() {
@@ -96,7 +98,7 @@
     wrap.className = 'modal';
     wrap.innerHTML = '<div class="modal-box lp-box" role="dialog" aria-modal="true" aria-labelledby="lpTitle">' +
       '<div class="modal-text" id="lpTitle">从 Laplace 截图导入</div>' +
-      '<div class="lp-tip">在 Laplace 的战斗记录里点截图，选「完整截图」：单栏、打开显示详情。每个回合生成一个伤害组，' +
+      '<div class="lp-tip">Laplace 战斗记录的截图（打开显示详情；单栏、双栏，深色、浅色都可以）。每个回合生成一个伤害组，' +
       '挨卡最多的敌人作主目标，其他被打到的敌人作 AOE 目标；均伤 = 伤害 ÷ 随机数（默认 0.9）。' +
       '截图里分不出固伤，固伤会被多算约 11%。图片只在本机识别，不会上传。</div>' +
       '<div class="modal-files"><label class="modal-file"><input type="file" hidden accept="image/*" multiple><span>选择截图</span></label></div>' +
@@ -129,8 +131,11 @@
           try {
             say('正在读取' + (files.length > 1 ? '第 ' + (f + 1) + ' 张' : '') + '截图…');
             const img = await decode(files[f]);
-            const scale = img.width < 1000 ? TEXT_WIDTH / img.width : 1;
-            const shot = await LS.readShot(img, (cell) => worker.recognize(cellCanvas(cell, scale)).then((r) => r.data.text),
+            let kind = '';
+            const shot = await LS.readShot(img, async (line, scale, k) => {
+              if (k !== kind) { await worker.setParameters({ tessedit_char_whitelist: WHITELIST[k] }); kind = k; }
+              return (await worker.recognize(cellCanvas(line, scale))).data.text;
+            },
               (done, total) => say('正在识别' + (files.length > 1 ? '第 ' + (f + 1) + ' 张' : '') + '：' + done + ' / ' + total + ' 格'));
             const found = LS.buildTurns(shot.records, img.width);
             if (!found.length) throw new Error('没有找到伤害记录：请打开 Laplace 截图设置里的「显示详情」');
@@ -146,7 +151,7 @@
       if (closed) return;
       list.innerHTML = turns.map(turnHtml).join('');
       const bad = turns.filter((t) => t.problems.length).length;
-      say(errors.length ? errors.join('\n') : turns.length + ' 个回合' + (bad ? '，其中 ' + bad + ' 个需要检查（默认不导入）' : '，血量全部核对无误'), errors.length > 0);
+      say(errors.length ? errors.join('\n') : turns.length + ' 个回合' + (bad ? '，其中 ' + bad + ' 个需要检查（默认不导入）' : '，全部核对无误'), errors.length > 0);
       refreshButton();
     }
 
