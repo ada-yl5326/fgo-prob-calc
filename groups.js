@@ -225,6 +225,7 @@
   /**
    * 在 container 里画组的切换条。summary(group) → 组名后面显示的简短结果（如「62.0%」），可省略。
    * onUsed(id) → 这个组在综合页里用了几次（删除前提示用）。
+   * tools: [{ label, run() }] → 「清空所有组」左边的额外按钮（例如「从 Laplace 截图导入」）。
    */
   function GroupBar(container, store, opts) {
     this.el = container;
@@ -260,7 +261,9 @@
       '<input class="group-name" type="text" maxlength="20" enterkeyhint="done" autocomplete="off" aria-label="' + label + '名称" value="' + escapeHtml(active.name) + '">' +
       '<button type="button" data-act="copy">复制</button>' +
       '<button type="button" data-act="remove"' + (store.list().length <= 1 ? ' disabled title="只剩一个组时不能删除"' : '') + '>删除</button></div>' +
-      '<div class="group-clear"><button type="button" data-act="clear">清空所有' + label + '</button></div>';
+      '<div class="group-clear">' + (this.opts.tools || []).map((t, i) =>
+        '<button type="button" class="group-tool" data-tool="' + i + '">' + escapeHtml(t.label) + '</button>').join('') +
+      '<button type="button" data-act="clear">清空所有' + label + '</button></div>';
     // 只横向滚动组的列表，让当前组露出来（不能用 scrollIntoView，它会连整页一起滚动）
     const on = this.el.querySelector('.group-chip.on'), row = this.el.querySelector('.group-chips');
     if (on && row.clientWidth) {
@@ -282,6 +285,7 @@
     if (!b) return;
     const store = this.store;
     if (b.dataset.group) { store.select(b.dataset.group); return; }
+    if (b.dataset.tool) { this.opts.tools[Number(b.dataset.tool)].run(); return; }
     if (b.dataset.act === 'add') store.add();
     else if (b.dataset.act === 'copy') store.copy(store.activeId);
     else if (b.dataset.act === 'remove') {

@@ -54,7 +54,7 @@
 <main class="guide">
 <nav class="guide-top"><a href="./">← 返回计算器</a><a class="to-top" href="#">回到顶部</a></nav>
 <h1>Laplace NS 使用指南</h1>
-<details class="toc" open><summary>目录</summary><ol><li><a href="#start">开始使用</a><span class="sub"><a href="#start-1">打开和安装</a><a href="#start-2">界面</a><a href="#start-3">「组」：每页都可以存好几份</a><a href="#start-4">输入数字的小技巧</a></span></li><li><a href="#kill">击破概率</a><span class="sub"><a href="#kill-1">基本用法：4 张卡打一个敌人</a><a href="#kill-2">伤害维度：卡多于 4 张或少于 4 张</a><a href="#kill-3">AOE：同时打死好几个敌人</a><a href="#kill-4">SL：没打死可以重来几次</a><a href="#kill-5">图表：HP 再高一点还能打死吗？</a></span></li><li><a href="#deal">发牌概率</a><span class="sub"><a href="#deal-1">基本用法：第 1 回合要发到 BB</a><a href="#deal-2">包含 / 仅含、不限 / 不能有</a><a href="#deal-3">连续几个回合：1–2 回合、1–3 回合</a><a href="#deal-4">多名从者、纹章</a><a href="#deal-5">「或者」：几种发牌都能接受</a><a href="#deal-6">计算过程</a></span></li><li><a href="#buff">buff 成功率</a><span class="sub"><a href="#buff-1">普通 buff</a><a href="#buff-2">二项分布 buff：一个技能判定好几次</a><a href="#buff-3">两个结果分别用在哪</a></span></li><li><a href="#send">送人概率</a><span class="sub"><a href="#send-1">基本用法：一个敌人、送走一名从者</a><a href="#send-2">敌人的更多设置</a><a href="#send-3">我方的更多设置</a><a href="#send-4">看结果：SL 表和详细结果</a><a href="#send-5">受击要求：要挨几下（攒 NP、触发被动）</a></span></li><li><a href="#combo">综合击破概率</a><span class="sub"><a href="#combo-1">基本用法：把组放进回合</a><a href="#combo-2">加上 buff 和送人</a><a href="#combo-split">按条件分配：不同的牌用不同的打法</a><a href="#combo-3">额外 SL 和全局额外 SL</a><a href="#combo-4">计算过程</a></span></li><li><a href="#workspace">工作目录与分享</a><span class="sub"><a href="#workspace-1">工作目录：保存整套设置</a><a href="#workspace-2">导出：发给别人或备份</a><a href="#workspace-3">导入别人的设置</a><a href="#workspace-4">分享图片：发一张结果截图</a></span></li><li><a href="#faq">常见问题</a></li></ol></details>
+<details class="toc" open><summary>目录</summary><ol><li><a href="#start">开始使用</a><span class="sub"><a href="#start-1">打开和安装</a><a href="#start-2">界面</a><a href="#start-3">「组」：每页都可以存好几份</a><a href="#start-4">输入数字的小技巧</a></span></li><li><a href="#kill">击破概率</a><span class="sub"><a href="#kill-1">基本用法：4 张卡打一个敌人</a><a href="#kill-2">伤害维度：卡多于 4 张或少于 4 张</a><a href="#kill-3">AOE：同时打死好几个敌人</a><a href="#kill-4">SL：没打死可以重来几次</a><a href="#kill-5">图表：HP 再高一点还能打死吗？</a><a href="#kill-laplace">从 Laplace 截图导入</a></span></li><li><a href="#deal">发牌概率</a><span class="sub"><a href="#deal-1">基本用法：第 1 回合要发到 BB</a><a href="#deal-2">包含 / 仅含、不限 / 不能有</a><a href="#deal-3">连续几个回合：1–2 回合、1–3 回合</a><a href="#deal-4">多名从者、纹章</a><a href="#deal-5">「或者」：几种发牌都能接受</a><a href="#deal-6">计算过程</a></span></li><li><a href="#buff">buff 成功率</a><span class="sub"><a href="#buff-1">普通 buff</a><a href="#buff-2">二项分布 buff：一个技能判定好几次</a><a href="#buff-3">两个结果分别用在哪</a></span></li><li><a href="#send">送人概率</a><span class="sub"><a href="#send-1">基本用法：一个敌人、送走一名从者</a><a href="#send-2">敌人的更多设置</a><a href="#send-3">我方的更多设置</a><a href="#send-4">看结果：SL 表和详细结果</a><a href="#send-5">受击要求：要挨几下（攒 NP、触发被动）</a></span></li><li><a href="#combo">综合击破概率</a><span class="sub"><a href="#combo-1">基本用法：把组放进回合</a><a href="#combo-2">加上 buff 和送人</a><a href="#combo-split">按条件分配：不同的牌用不同的打法</a><a href="#combo-3">额外 SL 和全局额外 SL</a><a href="#combo-4">计算过程</a></span></li><li><a href="#workspace">工作目录与分享</a><span class="sub"><a href="#workspace-1">工作目录：保存整套设置</a><a href="#workspace-2">导出：发给别人或备份</a><a href="#workspace-3">导入别人的设置</a><a href="#workspace-4">分享图片：发一张结果截图</a></span></li><li><a href="#faq">常见问题</a></li></ol></details>
 <p>Laplace NS（Laplace Next Station）是一个算概率的小工具：一回合能不能打死、能不能发到想要的牌、buff 能不能挂上、敌人能不能把指定的从者送走，以及把这些串成整个多回合方案的综合成功率。所有计算都在你自己的设备上完成，不上传任何数据。</p>
 <div class="tip"><p>截图里的数字都是随手编的示例，只用来说明怎么操作。</p></div>
 <h2 id="start">开始使用</h2>
@@ -95,6 +95,14 @@
 <p><b>伤害分布</b>：每根柱子是总伤害落在这一段的概率，蓝色是能击破的部分。点按（或左右滑动）图表上任意位置，会显示「总伤害 ≥ 那里的概率」，也就是 HP 为那个数时的击破率。</p>
 <figure><span class="shot"><img src="guide/img/kill-curve.webp" width="370" height="382" loading="lazy" alt="击破概率曲线：蓝色是单次，紫色是 SL 后"></span><figcaption>击破概率曲线：蓝色是单次，紫色是 SL 后</figcaption></figure>
 <p><b>击破概率曲线</b>：横轴是 HP，高度是这个 HP 下的击破率；填了 SL 时紫色曲线是 SL 后的击破率。点按或滑动可以查看任意 HP 的结果，适合回答「HP 多 5,000 还能打吗」。</p>
+<h3 id="kill-laplace">从 Laplace 截图导入</h3>
+<p>在 Chaldea 的 Laplace 里算好整场战斗后，可以把它的战斗记录截图直接导入，每个回合自动生成一个伤害组，不用一格一格抄数字。</p>
+<figure><span class="shot"><img src="guide/img/laplace-record.webp" width="390" height="506" loading="lazy" alt="Laplace 战斗记录（完整截图、单栏、显示详情）里的一个回合：每张卡一个格子，敌人栏里有 HP 和红色的 DMG"></span><figcaption>Laplace 战斗记录（完整截图、单栏、显示详情）里的一个回合：每张卡一个格子，敌人栏里有 HP 和红色的 DMG</figcaption></figure>
+<ol><li>在 Laplace 的战斗记录里点截图，选「<b>完整截图</b>」，用<b>单栏</b>、打开「<b>显示详情</b>」，保存图片。</li><li>在击破概率页的伤害组下面点「<b>从 Laplace 截图导入</b>」→「选择截图」，可以一次选好几张。</li><li>等识别完，检查每个回合的结果，勾选要导入的回合，点「导入」。</li></ol>
+<figure><span class="shot"><img src="guide/img/laplace-dialog.webp" width="366" height="593" loading="lazy" alt="识别结果：每个回合一张卡片，写出主目标、AOE 目标的 HP 和均伤"></span><figcaption>识别结果：每个回合一张卡片，写出主目标、AOE 目标的 HP 和均伤</figcaption></figure>
+<ul><li><b>一个回合 = 一个伤害组</b>，组名是「回合 1」「回合 2」…（选了几张图时前面加「图 2」）。挨卡最多的敌人是主目标，同一回合被打到的其他敌人是 AOE 目标；HP 是这个敌人这回合挨打前的血量（打完后的 HP + 伤害），多血条的敌人也按这样算，自动对上第几条血。</li><li><b>均伤 = 截图里的伤害 ÷ 随机数</b>：Laplace 默认按随机数 0.9 算伤害，所以一般是 ÷ 0.9；改过随机数的卡（伤害后面有「*」，下面写着 RNG）按写出的随机数换算。</li><li><b>核对</b>：同一个敌人后面每张卡的 HP 必须正好减去这张卡的伤害。有数字认错、对不上的回合会标红写出原因，默认不勾选；可以重新截一张更清楚的图，或者导入后自己改。</li><li><b>固伤</b>：截图里分不出固伤，固伤会跟着 ÷ 0.9 被多算约 11%（250 点固伤约多 28）。要精确时，导入后按<a href="#kill">基本用法</a>里的方法自己改均伤和 HP。</li><li>图片只在本机识别，不会上传。第一次用要下载约 7 MB 的识别组件，之后断网也能用。</li></ul>
+<figure><span class="shot"><img src="guide/img/laplace-groups.webp" width="370" height="700" loading="lazy" alt="导入后：每个回合一个伤害组，均伤、HP、AOE 目标都填好了"></span><figcaption>导入后：每个回合一个伤害组，均伤、HP、AOE 目标都填好了</figcaption></figure>
+<div class="tip"><p>目前只支持单栏截图。双栏截图、截图里没有显示详情（看不到每个敌人的 HP、DMG）时读不出来。</p></div>
 <h2 id="deal">发牌概率</h2>
 <p>算发到想要的牌的概率。3 人上场时牌库 15 张，每回合发 5 张，3 个回合发完再洗牌（2 人上场是 10 张、2 个回合）。</p>
 <h3 id="deal-1">基本用法：第 1 回合要发到 BB</h3>
@@ -202,7 +210,7 @@
 <p><b>数据会不会丢？</b> 输入自动保存在这台设备的浏览器里。清除浏览器数据、在 iPhone 上删掉桌面图标都会清空，请定期在工作目录里导出文件备份。</p>
 <p><b>断网能用吗？</b> 能。打开过一次（或添加到主屏幕）之后，断网也能用，计算全部在本机完成。</p>
 <p><b>还有问题或建议？</b> 欢迎到 <a href="https://github.com/ada-yl5326/fgo-prob-calc" target="_blank" rel="noopener">GitHub 仓库</a> 或 <a href="https://space.bilibili.com/28108391" target="_blank" rel="noopener">作者 B 站主页</a> 反馈。</p>
-<footer>v1.2 · 计算全部在本机完成，不上传任何数据</footer>
+<footer>v1.3 · 计算全部在本机完成，不上传任何数据</footer>
 </main>
 </body>
 </html>

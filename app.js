@@ -707,7 +707,11 @@
     loadInputs();
     update();
   });
-  new G.GroupBar($('killGroups'), store, { summary, onUsed: (id) => (window.ComboApp ? window.ComboApp.usage('kill', id) : 0) });
+  new G.GroupBar($('killGroups'), store, {
+    summary,
+    onUsed: (id) => (window.ComboApp ? window.ComboApp.usage('kill', id) : 0),
+    tools: [{ label: '从 Laplace 截图导入', run: () => window.LaplaceApp.open() }],
+  });
 
   // 页签切回来时重画（隐藏时量不到图表宽度）
   document.addEventListener('tabshow', (e) => { if (e.detail === 'kill') drawChart(); });
