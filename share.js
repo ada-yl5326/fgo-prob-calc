@@ -2,7 +2,7 @@
  * 工作文件的导入导出（不依赖页面：网页、Node 测试都能用）。
  *
  * 工作文件 = 一个工作目录的全部内容：伤害组、发牌组、送人组、buff 组、综合页的方案。
- *     { app: 'Laplace NS', format: 4, name, exportedAt, data: { kill: { groups }, deal: { groups }, send: { groups }, buff: { groups }, combo: 方案 } }
+ *     { app: 'Laplace NS', format: 6, name, exportedAt, data: { kill: { groups }, deal: { groups }, send: { groups }, buff: { groups }, combo: 方案 } }
  *     （format 2 以前没有送人组、format 3 以前没有 buff 组，读进来为空）
  * 文件就是这段 JSON（方便阅读）。
  * 分享码用更短的紧凑格式（见 compact()：不写字段名和组的编号，牌型、选牌写成短字符串，数字去掉千分位逗号），
@@ -15,8 +15,8 @@
   'use strict';
 
   var APP = 'Laplace NS';
-  var FORMAT = 5;                                        // 文件格式的版本：以后改格式时加 1，并继续能读旧版本（2 = v0.8 起伤害维度可以增减；3 = v0.9 起有送人组；4 = v1.0 起有 buff 组；5 = v1.1 起从者有受击要求）
-  var COMPACT = 6;                                       // 紧凑格式（分享码）的版本，见 compact()
+  var FORMAT = 6;                                        // 文件格式的版本：以后改格式时加 1，并继续能读旧版本（2 = v0.8 起伤害维度可以增减；3 = v0.9 起有送人组；4 = v1.0 起有 buff 组；5 = v1.1 起从者有受击要求；6 = v1.4 起送人组有「至少退场 n 人」、目标权重和特性，没有被攻击权重）
+  var COMPACT = 7;                                       // 紧凑格式（分享码）的版本，见 compact()
   var MODES = ['atLeast', 'exactly', 'atMost'];          // 二项分布 buff：至少 / 恰好 / 至多
   var DECKS = ['BBBAQ', 'BBAAQ', 'BBAQQ', 'BAAQQ', 'BAAAQ', 'BAQQQ'];
   var ROLES = ['must', 'may', 'keep', 'immortal'];       // 送人组的从者角色：要退场 / 可以退场 / 不能退场 / 不会死
@@ -65,7 +65,7 @@
   }
 
   // ---------- 紧凑格式（分享码用）----------
-  // [6, 名称, 伤害组们, 发牌组们, 方案, 送人组们, buff 组们]；组用在数组里的位置（从 1 开始）互相引用，0 = 没有。
+  // [7, 名称, 伤害组们, 发牌组们, 方案, 送人组们, buff 组们]；组用在数组里的位置（从 1 开始）互相引用，0 = 没有。
   //   伤害组：[名称, [主目标各维度的均伤], HP, SL, [[AOE 1 各维度的均伤…, AOE 1 HP], …]]（末尾空的项省略）
   //   （版本 2 = v0.7 以前，主目标固定 4 维、AOE 目标 1 维：[名称, 4 张卡的均伤, HP, SL, [AOE 1 群体伤害, AOE 1 HP, …]]，仍然能读）
   //   发牌组：[名称, 人数 × 10 + 回合范围, 「配卡+纹章位」用 | 隔开, [[15 位选牌, 仅含位, 不能有位], …], 正在编辑第几种条件]
@@ -75,13 +75,14 @@
   //                    [我方 buff 失败时的伤害组], 其他的, [敌方 buff 失败时的送人组], 其他的]（末尾空的项省略）
   //   buff 组：[名称, buff 们]；buff：[名称, 成功率, SL]（普通）或 [名称, 成功率, SL, 1, 判定次数, 命中次数, 至少 0 / 恰好 1 / 至多 2, 分别填 ? 1 : 0, [每次的成功率]]
   //   （版本 4 = v0.9，没有 buff 组，方案里没有 buff、失败时、额外 SL，仍然能读）
-  //   送人组：[名称, 敌人们, 从者们, 有后备队友 ? 1 : 0, SL]
+  //   送人组：[名称, 敌人们, 从者们, 有后备队友 ? 1 : 0, SL, 「可以退场」的从者里至少退场几人（0 = 不要求，省略）]
   //     敌人：[行动次数, 普通攻击均伤, 开关位, 暴击均伤, 暴击率, 牌型（DECKS 里第几个，从 1 开始）, 放宝具的位（第 k 次 = 第 k−1 位）,
-  //           宝具均伤, 开技能概率, [对各从者的伤害倍率]]
-  //           开关位：1 普通攻击全体，2 暴击，4 暴击全体，8 牌型，16 宝具，32 宝具全体，64 开技能，128 伤害倍率
-  //     从者：[角色（ROLES 里第几个，从 0 开始）, HP, 被攻击权重, 开关位（1 嘲讽，2 战续血量分别填，4 受击要求）, 无敌次数, 战续次数, [各次战续的血量],
+  //           宝具均伤, 开技能概率, [对各从者的伤害倍率], [目标权重：任意目标, 特性 1, 特性 2, 特性 3]]
+  //           开关位：1 普通攻击全体，2 暴击，4 暴击全体，8 牌型，16 宝具，32 宝具全体，64 开技能，128 伤害倍率，256 目标权重
+  //     从者：[角色（ROLES 里第几个，从 0 开始）, HP, 特性的位（特性 k = 第 k−1 位）, 开关位（1 嘲讽，2 战续血量分别填，4 受击要求）, 无敌次数, 战续次数, [各次战续的血量],
   //           [受击要求：[类型（B A Q 普通 宝具，从 0 开始）, 暴击（不限 暴击 不暴击）, 至少 0 / 恰好 1 / 至多 2, 次数]（末尾的 0 和空省略）…]]
   //           （受击要求没开、只有一条默认的空条目时省略）
+  //   （版本 6 = v1.1 ~ v1.3，送人组没有「至少退场」、目标权重，从者的第 3 项是被攻击权重，仍然能读）
   //   （版本 5 = v1.0，从者没有受击要求，仍然能读）
   //   （版本 3 = v0.8，没有送人组、方案里没有送人格，仍然能读）
   // 和页面的数据结构对应；以后页面的数据结构变了，这里要一起改（并把 COMPACT 加 1，继续能读旧版本）。
@@ -98,11 +99,13 @@
     var x = g.data || {};
     var E = arr(x.enemies).map(function (e) {
       var nm = e.normal || {}, cr = e.crit || {}, dk = e.deck || {}, np = e.np || {}, sk = e.skill || {}, mu = e.mult || {};
-      var flag = (nm.aoe ? 1 : 0) | (cr.on ? 2 : 0) | (cr.aoe ? 4 : 0) | (dk.on ? 8 : 0) | (np.on ? 16 : 0) | (np.aoe ? 32 : 0) | (sk.on ? 64 : 0) | (mu.on ? 128 : 0);
+      var am = e.aim || {};
+      var flag = (nm.aoe ? 1 : 0) | (cr.on ? 2 : 0) | (cr.aoe ? 4 : 0) | (dk.on ? 8 : 0) | (np.on ? 16 : 0) | (np.aoe ? 32 : 0) | (sk.on ? 64 : 0) | (mu.on ? 128 : 0) |
+        (am.on ? 256 : 0);
       var at = 0;
       arr(np.at).forEach(function (k) { if (int(k, 1, 6)) at |= 1 << (k - 1); });
       return trim([e.actions || 3, num(nm.dmg), flag, num(cr.dmg), num(cr.rate), DECKS.indexOf(dk.value) + 1, at, num(np.dmg), num(sk.rate),
-        arr(mu.values).map(num)], blank);
+        arr(mu.values).map(num), trim(arr(am.values).map(num), blank)], blank);
     });
     var S = arr(x.servants).map(function (v) {
       var hi = v.hits || {}, rows = arr(hi.rows).map(function (r) {
@@ -110,20 +113,25 @@
           function (c) { return c === '' || c === 0; });
       });
       if (!hi.on && rows.length === 1 && rows[0].length === 1 && rows[0][0] === 3) rows = [];   // 只有一条默认的空条目
-      return trim([Math.max(0, ROLES.indexOf(v.role)), num(v.hp), num(v.weight), (v.taunt ? 1 : 0) | (v.gutsEach ? 2 : 0) | (hi.on ? 4 : 0), v.inv || 0, v.guts || 0,
+      var traits = 0;
+      arr(v.traits).forEach(function (on, k) { if (on === true && k < 3) traits |= 1 << k; });
+      return trim([Math.max(0, ROLES.indexOf(v.role)), num(v.hp), traits || '', (v.taunt ? 1 : 0) | (v.gutsEach ? 2 : 0) | (hi.on ? 4 : 0), v.inv || 0, v.guts || 0,
         arr(v.gutsHp).map(num), rows], blank);
     });
-    return trim([str(g.name), E, S, x.backup === false ? 0 : 1, num(x.sl)], blank);
+    return trim([str(g.name), E, S, x.backup === false ? 0 : 1, num(x.sl), int(x.minOut, 1, 3) || ''], blank);
   }
 
-  /** 紧凑格式 → 送人组（读进页面后还会经过送人页自己的检查） */
-  function expandSend(r, i) {
+  /**
+   * 紧凑格式 → 送人组（读进页面后还会经过送人页自己的检查）。version = 紧凑格式的版本：
+   * 6 以前从者的第 3 项是被攻击权重，原样读成 weight，由送人页换成目标权重和特性
+   */
+  function expandSend(r, i, version) {
     r = arr(r);
     var enemies = arr(r[1]).map(function (e) {
       e = arr(e);
-      var flag = int(e[2], 0, 255) || 0, at = int(e[6], 0, 63), atList = [];
+      var flag = int(e[2], 0, 511) || 0, at = int(e[6], 0, 63), atList = [];
       for (var k = 1; k <= 6; k++) if (at & (1 << (k - 1))) atList.push(k);
-      var mv = arr(e[9]);
+      var mv = arr(e[9]), av = arr(e[10]);
       return {
         actions: int(e[0], 1, 6) || 3,
         normal: { dmg: str(e[1]), aoe: !!(flag & 1) },
@@ -132,6 +140,7 @@
         np: { on: !!(flag & 16), at: at === null ? [1] : atList, dmg: str(e[7]), aoe: !!(flag & 32) },
         skill: { on: !!(flag & 64), rate: str(e[8]) },
         mult: { on: !!(flag & 128), values: [0, 1, 2].map(function (k) { return str(mv[k]); }) },
+        aim: { on: !!(flag & 256), values: [0, 1, 2, 3].map(function (k) { return str(av[k]); }) },
       };
     });
     var servants = arr(r[2]).map(function (v) {
@@ -141,11 +150,15 @@
         r = arr(r);
         return { type: HIT_TYPES[int(r[0], 0, 4) || 0], crit: HIT_CRIT[int(r[1], 0, 2) || 0], cmp: HIT_CMP[int(r[2], 0, 2) || 0], n: str(r[3]) };
       });
-      return { role: ROLES[int(v[0], 0, 3) || 0], hp: str(v[1]), weight: str(v[2]), taunt: !!(flag & 1), inv: int(v[4], 0, 99) || 0,
+      var out = { role: ROLES[int(v[0], 0, 3) || 0], hp: str(v[1]), taunt: !!(flag & 1), inv: int(v[4], 0, 99) || 0,
         guts: int(v[5], 0, 99) || 0, gutsHp: arr(v[6]).map(str), gutsEach: !!(flag & 2),
         hits: { on: !!(flag & 4), rows: rows.length ? rows : [{ type: 'N', crit: 'any', cmp: 'ge', n: '' }] } };
+      var tb = int(v[2], 0, 7) || 0;
+      if (version < 7) out.weight = str(v[2]);
+      else out.traits = [0, 1, 2].map(function (k) { return !!(tb & (1 << k)); });
+      return out;
     });
-    return { id: 's' + (i + 1), name: str(r[0]), data: { enemies: enemies, servants: servants, backup: r[3] !== 0, sl: str(r[4]) } };
+    return { id: 's' + (i + 1), name: str(r[0]), data: { enemies: enemies, servants: servants, backup: r[3] !== 0, minOut: int(r[5], 0, 3) || 0, sl: str(r[4]) } };
   }
 
   /** buff 组 → 紧凑格式 */
@@ -233,7 +246,7 @@
   /** 紧凑格式 → { name, data }（结构和页面的一样；读进页面后还会经过各页面自己的检查） */
   function expand(a) {
     if (Array.isArray(a) && a[0] > COMPACT) throw new Error('这个分享码来自更新的版本，请先刷新网页、更新到最新版再导入');
-    if (!Array.isArray(a) || [2, 3, 4, 5, 6].indexOf(a[0]) < 0 || !Array.isArray(a[2]) || !Array.isArray(a[3])) throw new Error('无法识别：分享码不完整或已损坏');
+    if (!Array.isArray(a) || [2, 3, 4, 5, 6, 7].indexOf(a[0]) < 0 || !Array.isArray(a[2]) || !Array.isArray(a[3])) throw new Error('无法识别：分享码不完整或已损坏');
     var v2 = a[0] === 2;
     var kill = a[2].map(function (r, i) {
       r = Array.isArray(r) ? r : [];
@@ -274,7 +287,7 @@
       });
       return { id: 'd' + (i + 1), name: str(r[0]), data: { servants: Math.floor(sv / 10), scope: sv % 10, owners: own, alts: alts, alt: int(r[4], 0, 9) || 0 } };
     });
-    var send = arr(a[5]).map(expandSend);               // 版本 3 以前没有送人组
+    var send = arr(a[5]).map(function (r, i) { return expandSend(r, i, a[0]); });   // 版本 3 以前没有送人组
     var buff = arr(a[6]).map(expandBuff);               // 版本 4 以前没有 buff 组
     var combo = null, c = a[4];
     if (Array.isArray(c)) {

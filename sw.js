@@ -1,7 +1,7 @@
 // 离线缓存（Service Worker）：整个版本的文件一起缓存，打开网页时只用当前版本的缓存，断网也能用。
 // 网页文件改动后，CACHE 里的版本号会变（由 tools/update_sw_version.py 按文件内容生成，测试会检查）：
 // 浏览器发现 sw.js 变了，就在后台下载新版本的全部文件，下载完再整体替换旧版本，不会新旧文件混用。
-const CACHE = 'killprob-2aa107afb7';
+const CACHE = 'killprob-dc594408a0';
 const FILES = [
   './', 'index.html', 'style.css', 'groups.js', 'killprob.js', 'deal.js', 'combo.js', 'send.js', 'send-worker.js', 'buff.js',
   'app.js', 'deal-app.js', 'send-app.js', 'buff-app.js', 'combo-app.js', 'share.js', 'qr.js', 'qr-read.js', 'workspace-app.js', 'summary-app.js', 'laplace-shot.js', 'laplace-app.js', 'main.js', 'manifest.webmanifest',
@@ -19,12 +19,12 @@ const GUIDE_FILES = [
   'guide/img/deal-servants.webp', 'guide/img/deal-or.webp', 'guide/img/deal-steps.webp',
   'guide/img/buff-plain.webp', 'guide/img/buff-binom.webp', 'guide/img/send-basic.webp',
   'guide/img/send-servants.webp', 'guide/img/send-enemies.webp', 'guide/img/send-ours.webp',
-  'guide/img/send-result.webp', 'guide/img/send-detail.webp', 'guide/img/send-hits.webp',
-  'guide/img/send-hits-result.webp', 'guide/img/combo-basic.webp', 'guide/img/combo-palette.webp',
-  'guide/img/combo-buff-send.webp', 'guide/img/combo-split.webp', 'guide/img/combo-split-result.webp',
-  'guide/img/combo-sl.webp', 'guide/img/combo-sl-result.webp', 'guide/img/combo-steps.webp',
-  'guide/img/ws-panel.webp', 'guide/img/ws-export.webp', 'guide/img/ws-import.webp',
-  'guide/img/share-image.webp'
+  'guide/img/send-aim.webp', 'guide/img/send-traits.webp', 'guide/img/send-result.webp',
+  'guide/img/send-detail.webp', 'guide/img/send-hits.webp', 'guide/img/send-hits-result.webp',
+  'guide/img/combo-basic.webp', 'guide/img/combo-palette.webp', 'guide/img/combo-buff-send.webp',
+  'guide/img/combo-split.webp', 'guide/img/combo-split-result.webp', 'guide/img/combo-sl.webp',
+  'guide/img/combo-sl-result.webp', 'guide/img/combo-steps.webp', 'guide/img/ws-panel.webp',
+  'guide/img/ws-export.webp', 'guide/img/ws-import.webp', 'guide/img/share-image.webp'
 ];
 
 self.addEventListener('install', (event) => {

@@ -118,19 +118,22 @@
       if (e.np.on) extra.push('宝具 第 ' + e.np.at.join('、') + ' 次' + (num(e.np.dmg) ? ' ' + num(e.np.dmg) : '（无伤害）') + (e.np.aoe ? '全体' : ''));
       if (e.skill.on) extra.push('开技能 ' + blank(e.skill.rate) + '%');
       if (e.mult.on) extra.push('倍率 ' + e.mult.values.slice(0, d.servants.length).map((v) => blank(v) || '100').join(' / ') + '%');
+      if (e.aim.on) extra.push('目标权重 ' + Send.AIM_NAMES.map((t, k) => (num(e.aim.values[k]) ? t + ' ' + num(e.aim.values[k]) : '')).filter(Boolean).join(' / '));
       return [String(j + 1), String(e.actions), blank(e.normal.dmg) + (e.normal.aoe ? ' 全体' : ''),
         { text: extra.map((x) => (typeof x === 'string' ? x : x.text)).join('；') || '—', cards: extra.some((x) => typeof x !== 'string') }];
     });
     out.push({ t: 'table', title: '敌方（按行动顺序）', head: ['敌人', '行动', '普通攻击', '其他'], rows: enemies });
     const servants = d.servants.map((s, i) => {
       const extra = [];
+      if (Send.anyAim(d) && s.traits.some(Boolean)) extra.push(Send.AIM_NAMES.slice(1).filter((_, k) => s.traits[k]).join('、'));
       if (s.taunt) extra.push('嘲讽');
       if (s.role !== 'immortal' && s.inv) extra.push('无敌 ' + s.inv);
       if (s.role !== 'immortal' && s.guts) extra.push('战续 ' + s.guts + '（' + (s.gutsEach ? s.gutsHp.map(blank).join(' / ') : blank(s.gutsHp[0])) + '）');
       if (s.hits.on) extra.push('受击：' + s.hits.rows.map(Send.hitText).join('，'));
-      return [String(i + 1), ROLE[s.role], s.role === 'immortal' ? '—' : blank(s.hp), num(s.weight) || '1', extra.join('；') || '—'];
+      return [String(i + 1), ROLE[s.role], s.role === 'immortal' ? '—' : blank(s.hp), extra.join('；') || '—'];
     });
-    out.push({ t: 'table', title: '我方（' + (d.backup ? '有' : '没有') + '后备队友）', head: ['从者', '角色', 'HP', '权重', '其他'], rows: servants });
+    const minOut = Send.minOutOf(d);
+    out.push({ t: 'table', title: '我方（' + (d.backup ? '有' : '没有') + '后备队友' + (minOut ? '；可以退场的至少退场 ' + minOut + ' 人' : '') + '）', head: ['从者', '角色', 'HP', '其他'], rows: servants });
     if (compact) out.push({ t: 'kv', rows: [[label, r.status === 'ok' ? pct(r.single) + '（不含 SL）' : r.message || '计算中']] });
     else if (r.status !== 'ok') out.push({ t: 'note', text: r.message || '还在计算' });
     return out;

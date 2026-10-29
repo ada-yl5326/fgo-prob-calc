@@ -806,6 +806,8 @@ body.dragging, body.dragging * { cursor: grabbing !important; user-select: none;
 .sd-tools button { padding: 0 10px; font-size: 15px; line-height: 26px; }
 .sd-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 8px; }
 .sd-row .dims { margin-left: 0; }
+.sd-minout { margin: 4px 0 14px; }
+.sd-minout-hint { margin-top: 4px; font-size: 12px; color: var(--muted); }
 .sd-attack { display: grid; grid-template-columns: 1fr auto; align-items: start; gap: 10px; }
 .sd-attack .seg { margin-top: 21px; }
 .sd-toggles { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 4px; }
@@ -825,6 +827,10 @@ body.dragging, body.dragging * { cursor: grabbing !important; user-select: none;
 .sd-roles button { flex: 1; padding: 6px 4px; font-size: 13px; }
 .sd-counts { margin: 4px 0 0; }
 .sd-head-toggles { display: flex; gap: 6px; }
+.sd-traits { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.sd-traits-name { margin-right: 2px; font-size: 13px; color: var(--muted); }
+.sd-aim-odds { margin-top: 6px; font-size: 12px; color: var(--muted); }
+.sd-aim-odds:empty { display: none; }
 .sd-hit { padding: 6px 0; }
 .sd-hit + .sd-hit { border-top: 1px dotted var(--border); }
 .sd-hit > .seg { display: flex; margin-bottom: 6px; }

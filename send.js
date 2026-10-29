@@ -3,6 +3,8 @@
  *
  * 敌方行动阶段：敌人按行动顺序轮流行动，每次行动执行预设动作序列里下一个还没执行的动作；
  * 没有合法目标时这次行动被跳过（行动次数照样用掉，预设动作顺延）。
+ * 单体攻击选目标（aimOdds）：有人嘲讽时只在嘲讽的从者里平均挑；否则敌人设了目标权重时先按权重选一项（任意 / 某个特性），
+ * 再在合法目标里有这个特性的从者中平均挑（一个都没有时在全部合法目标里平均挑）；没设时在全部合法目标里平均挑。
  *
  * 精确计算（compute）：按行动一步一步展开全部分支，状态相同的合并。
  *     状态 = 每个敌人执行到预设序列的第几个 + 每名会倒下的从者（是否退场、用了几次战续、剩几次无敌、
@@ -30,15 +32,18 @@
   // 受击要求：类型 B / A / Q / 普通 / 宝具；暴击 不限 / 暴击 / 不暴击（宝具没有暴击）；次数 至少 / 恰好 / 至多
   var HIT_TYPES = ['B', 'A', 'Q', 'N', 'NP'], HIT_CRIT = ['any', 'yes', 'no'], HIT_CMP = ['ge', 'eq', 'le'];
   var MAX_HIT_ROWS = 6, MAX_HITS = MAX_ENEMIES * MAX_ACTIONS;
+  var MAX_TRAITS = 3;                                    // 特性 1 ~ 3（敌人按特性选目标）
 
   /**
    * 检查并整理输入。cfg = {
    *   enemies: [{ actions, normal: { dmg, aoe }, crit: null | { dmg, rate, aoe }, skill: 开技能概率 (0 ~ 1),
    *               deck: null | 'BBAAQ', np: null | { at: [第几个预设动作，1 起], dmg: 0 = 无伤害宝具, aoe },
-   *               mult: [对每名从者的伤害倍率 %，默认 100] }]（按行动顺序）,
-   *   servants: [{ role, hp, inv, guts: [每次战续的血量], taunt, weight,
+   *               mult: [对每名从者的伤害倍率 %，默认 100],
+   *               aim: null | [目标权重：任意, 特性 1, 特性 2, 特性 3（省略 = 0）] }]（按行动顺序）,
+   *   servants: [{ role, hp, inv, guts: [每次战续的血量], taunt, traits: [有哪几个特性，1 ~ 3],
    *                hits: [受击要求 { type: 'B' | 'A' | 'Q' | 'N' 普通 | 'NP' 宝具, crit: 'any' | 'yes' | 'no', cmp: 'ge' | 'eq' | 'le', n }] }],
-   *   backup: 有后备队友（默认 true）
+   *   backup: 有后备队友（默认 true）,
+   *   minOut: 「可以退场」的从者里至少退场几人才算成功（省略 = 不要求；多于「可以退场」的人数时 = 全部）
    * }
    * 返回内部模型；输入有误时抛出 Error（message 是给用户看的说明）。
    */
@@ -54,8 +59,12 @@
       var guts = mortal ? (s.guts || []).map(function (g, k) { return num(g, 1, 1e12, name + '第 ' + (k + 1) + ' 次战续的血量'); }) : [];
       if (guts.length > MAX_GUTS) throw new Error(name + '的战续次数最多 ' + MAX_GUTS + ' 次');
       var inv = mortal ? Math.round(num(s.inv || 0, 0, MAX_INV, name + '的无敌次数')) : 0;
-      var weight = num(s.weight === undefined ? 1 : s.weight, 0, 1e9, name + '的被攻击权重');
-      if (!(weight > 0)) throw new Error(name + '的被攻击权重要大于 0');
+      var traits = [false];                              // traits[t] = 有特性 t
+      for (var t = 1; t <= MAX_TRAITS; t++) traits.push(false);
+      (s.traits || []).forEach(function (t) {
+        if (t !== Math.round(t) || t < 1 || t > MAX_TRAITS) throw new Error(name + '的特性有误');
+        traits[t] = true;
+      });
       var hits = (s.hits || []).map(function (h, k) {
         var what = name + '受击要求第 ' + (k + 1) + ' 条';
         h = h || {};
@@ -67,11 +76,17 @@
         return { type: h.type, crit: crit, cmp: h.cmp, n: n, cap: h.cmp === 'ge' ? n : n + 1 };
       });
       if (hits.length > MAX_HIT_ROWS) throw new Error(name + '的受击要求最多 ' + MAX_HIT_ROWS + ' 条');
-      return { role: s.role, mortal: mortal, hps: [hp].concat(guts), inv: inv, taunt: !!s.taunt, weight: weight, hits: hits };
+      return { role: s.role, mortal: mortal, hps: [hp].concat(guts), inv: inv, taunt: !!s.taunt, traits: traits, hits: hits };
     });
+    var may = servants.filter(function (s) { return s.role === 'may'; }).length, need = 0;   // 「可以退场」的里至少退场几人
+    if (cfg.minOut !== undefined && cfg.minOut !== null) {
+      var minOut = num(cfg.minOut, 1, MAX_SERVANTS, '至少退场的人数');
+      if (minOut !== Math.round(minOut)) throw new Error('至少退场的人数要是整数');
+      need = Math.min(may, minOut);
+    }
     // 只有「不能退场」时算的是「指定的从者都没退场」的概率
-    if (!servants.some(function (s) { return s.role === 'must' || s.role === 'keep' || s.hits.length; })) {
-      throw new Error('至少要有一名「要退场」或「不能退场」的从者，或者设置受击要求');
+    if (!need && !servants.some(function (s) { return s.role === 'must' || s.role === 'keep' || s.hits.length; })) {
+      throw new Error('至少要有一名「要退场」或「不能退场」的从者，或者设置至少退场的人数、受击要求');
     }
     var enemies = es.map(function (e, j) {
       var name = '敌人 ' + (j + 1);
@@ -102,12 +117,22 @@
         npKind = { p: 1, dmg: d, card: 1, color: null, aoe: !!e.np.aoe, np: true, crit: false, none: d === 0 };
       }
       var lastNP = presets.lastIndexOf(true);
+      var aim = null;                                    // 目标权重：[{ t: 0 任意 / 特性, p: 选中这一项的概率 }]；没设、只有「任意」时 = null
+      if (e.aim) {
+        if (e.aim.length > MAX_TRAITS + 1) throw new Error(name + '的目标权重有误');
+        var ws = e.aim.map(function (w, t) { return num(w === undefined || w === null || w === '' ? 0 : w, 0, 1e9, name + (t ? '对特性 ' + t : '对任意目标') + '的权重'); });
+        var wsum = ws.reduce(function (a, b) { return a + b; }, 0);
+        if (!(wsum > 0)) throw new Error(name + '的目标权重至少要有一项大于 0');
+        aim = [];
+        ws.forEach(function (w, t) { if (w > 0) aim.push({ t: t, p: w / wsum }); });
+        if (aim.length === 1 && aim[0].t === 0) aim = null;
+      }
       var all = npKind ? kinds.concat([npKind]) : kinds.slice();
       all.forEach(function (k, idx) {
         k.idx = idx;
         k.hitRows = servants.map(function (sv) { return hitRows(sv.hits, k); });   // 这种攻击打到从者 i 时可能计入他的哪几条受击要求
       });
-      return { deck: !!e.deck, actions: n, presets: presets, lastNP: lastNP, kinds: kinds, npKind: npKind, all: all, skill: skill, mult: mult };
+      return { deck: !!e.deck, actions: n, presets: presets, lastNP: lastNP, kinds: kinds, npKind: npKind, all: all, skill: skill, mult: mult, aim: aim };
     });
     if (!enemies.some(function (e) { return e.deck; }) &&
         servants.some(function (s) { return s.hits.some(function (h) { return 'BAQ'.indexOf(h.type) >= 0; }); })) {
@@ -122,7 +147,7 @@
     var remain = [], cnt = enemies.map(function (e) { return e.actions; });
     slots.forEach(function (j) { cnt[j]--; remain.push(cnt.slice()); });   // remain[t][j] = 第 t 次行动之后敌人 j 还剩几次
     return {
-      servants: servants, enemies: enemies, slots: slots, remain: remain, backup: cfg.backup !== false,
+      servants: servants, enemies: enemies, slots: slots, remain: remain, backup: cfg.backup !== false, need: need,
       taunted: servants.some(function (s) { return s.taunt; }),
     };
   }
@@ -348,6 +373,24 @@
     return all.filter(function (k) { return (!taunt || m.servants[k].taunt) && s[E + 1 + SV * k + BAN] !== j; });
   };
 
+  /**
+   * 敌人 j 的单体攻击打到 legal[n] 的概率。legal 都是嘲讽的从者（有人嘲讽）或敌人没设目标权重时平均；
+   * 否则每一项的概率分给合法目标里有这个特性的从者（「任意」= 全部合法目标；一个都没有时也分给全部合法目标）
+   */
+  Exact.prototype.aimOdds = function (j, legal) {
+    var m = this.m, aim = m.enemies[j].aim, L = legal.length, odds = [], n;
+    var even = !aim || m.servants[legal[0]].taunt;      // 有活着的嘲讽从者时 legal 里只有嘲讽的从者
+    for (n = 0; n < L; n++) odds.push(even ? 1 / L : 0);
+    if (even) return odds;
+    aim.forEach(function (o) {
+      var fit = [];
+      for (n = 0; n < L; n++) if (!o.t || m.servants[legal[n]].traits[o.t]) fit.push(n);
+      if (!fit.length) for (n = 0; n < L; n++) fit.push(n);
+      fit.forEach(function (x) { odds[x] += o.p / fit.length; });
+    });
+    return odds;
+  };
+
   /** 一次攻击打到 targets：结果逐个交给 emit(p, 状态) */
   Exact.prototype.strike = function (s, j, kind, targets, p, emit) {
     var base = s.slice(), E = this.E, ids = this.hitId[j][kind.idx], off = [], ed = [], n, k;
@@ -407,13 +450,12 @@
     if (pa <= 0) return;
     var legal = this.legal(s, j);
     if (!legal.length) { c = s.slice(); this.clearBans(c); emit(pa, c); return; }   // 没有合法目标：跳过，预设动作顺延
-    var weight = 0, everyone = [], i;
-    legal.forEach(function (k) { weight += m.servants[k].weight; });
+    var odds = this.aimOdds(j, legal), everyone = [], i;
     for (i = 0; i < m.servants.length; i++) if (this.alive(s, i)) everyone.push(i);
     (isNP ? [e.npKind] : e.kinds).forEach(function (kind) {
       var pk = pa * kind.p;
       if (kind.aoe) self.strike(s, j, kind, everyone, pk, emit);
-      else legal.forEach(function (k) { self.strike(s, j, kind, [k], pk * m.servants[k].weight / weight, emit); });
+      else legal.forEach(function (k, n) { if (odds[n] > 0) self.strike(s, j, kind, [k], pk * odds[n], emit); });
     });
   };
 
@@ -446,7 +488,7 @@
   }
 
   /**
-   * 精确计算。返回 { exact: true, success, fail, mustAlive, keepDead, hitBad: 受击要求不符, endGuts, endTaunt,
+   * 精确计算。返回 { exact: true, success, fail, mustAlive, fewOut, keepDead, hitBad: 受击要求不符, endGuts, endTaunt,
    *                 servants: [{ out: 退场概率, guts: 触发过战续的概率, hitOk: 受击要求符合的概率 }], states: 最多时的状态数 }；
    * 分支数超过 maxWork 或状态数超过 maxStates 时返回 null。
    */
@@ -499,9 +541,12 @@
 
   // ---------------------------------------------------------------- 模拟（与精确计算分开实现同一套规则，测试时互相对照）
 
-  /** 结束时的一个状态计入结果：s = { end, sv: [{ dead, life } | null], hit: [受击要求符合?] } */
+  /**
+   * 结束时的一个状态计入结果：s = { end, sv: [{ dead, life } | null], hit: [受击要求符合?] }。
+   * 失败原因：mustAlive 要退场的没全部退场，fewOut 可以退场的退场人数不够，keepDead 不能退场的退场了，hitBad 受击要求不符
+   */
   function tally(m, res, s, p) {
-    var mustAlive = false, keepDead = false, hitBad = false;
+    var mustAlive = false, out = 0, keepDead = false, hitBad = false;
     m.servants.forEach(function (sv, i) {
       var x = s.sv[i];
       if (sv.hits.length) { if (s.hit[i]) res.servants[i].hitOk += p; else hitBad = true; }
@@ -509,10 +554,13 @@
       if (x.dead) res.servants[i].out += p;
       if (x.life > 0) res.servants[i].guts += p;
       if (sv.role === 'must' && !x.dead) mustAlive = true;
+      if (sv.role === 'may' && x.dead) out++;
       if (sv.role === 'keep' && x.dead) keepDead = true;
     });
-    if (mustAlive || keepDead || hitBad) res.fail += p; else res.success += p;
+    var fewOut = out < m.need;
+    if (mustAlive || fewOut || keepDead || hitBad) res.fail += p; else res.success += p;
     if (mustAlive) res.mustAlive += p;
+    if (fewOut) res.fewOut += p;
     if (keepDead) res.keepDead += p;
     if (hitBad) res.hitBad += p;
     if (s.end === 'guts') res.endGuts += p;
@@ -521,7 +569,7 @@
 
   function emptyResult(m) {
     return {
-      success: 0, fail: 0, mustAlive: 0, keepDead: 0, hitBad: 0, endGuts: 0, endTaunt: 0,
+      success: 0, fail: 0, mustAlive: 0, fewOut: 0, keepDead: 0, hitBad: 0, endGuts: 0, endTaunt: 0,
       servants: m.servants.map(function () { return { out: 0, guts: 0, hitOk: 0 }; }),
     };
   }
@@ -536,7 +584,7 @@
     var N = m.servants.length, E = m.enemies.length, R = KP.RAND_COUNT, T = m.slots.length, i, k;
     var mortal = m.servants.map(function (sv) { return sv.mortal; });
     var taunt = m.servants.map(function (sv) { return sv.taunt; });
-    var weight = m.servants.map(function (sv) { return sv.weight; });
+    var traits = m.servants.map(function (sv) { return sv.traits; });
     var hps = m.servants.map(function (sv) { return sv.hps; });
     var cum = m.enemies.map(function (e) { var acc = 0; return e.kinds.map(function (kd) { acc += kd.p; return acc; }); });
     var outs = m.enemies.map(function (e, j) {
@@ -545,7 +593,7 @@
       });
     });
     var dead = new Uint8Array(N), life = new Int32Array(N), inv = new Int32Array(N), ban = new Int32Array(N);
-    var taken = new Float64Array(N), q = new Int32Array(E), legal = new Int32Array(N), targets = new Int32Array(N);
+    var taken = new Float64Array(N), q = new Int32Array(E), legal = new Int32Array(N), fit = new Int32Array(N), targets = new Int32Array(N);
     var cross = new Int32Array(N), revived = new Int32Array(N);
     var hc = m.servants.map(function (s) { return new Int32Array(s.hits.length); });   // 各条受击要求挨了几下
     var sv = m.servants.map(function () { return { dead: false, life: 0 }; }), state = { end: null, sv: [], hit: [] };
@@ -556,12 +604,12 @@
       for (var t = 0; t < T && !end; t++) {
         var j = m.slots[t], e = m.enemies[j], qi = q[j], isNP = e.presets[qi];
         if (!isNP && qi === 0 && e.skill > 0 && rand() < e.skill) { q[j]++; ban.fill(-1); continue; }
-        var anyTaunt = false, nl = 0, wsum = 0, na = 0;
+        var anyTaunt = false, nl = 0, na = 0;
         for (i = 0; i < N; i++) if ((!mortal[i] || !dead[i]) && taunt[i]) anyTaunt = true;
         for (i = 0; i < N; i++) {
           if (mortal[i] && dead[i]) continue;
           targets[na++] = i;
-          if ((!anyTaunt || taunt[i]) && ban[i] !== j) { legal[nl++] = i; wsum += weight[i]; }
+          if ((!anyTaunt || taunt[i]) && ban[i] !== j) legal[nl++] = i;
         }
         if (!nl) { ban.fill(-1); continue; }               // 没有合法目标：跳过，预设动作顺延
         var kind;
@@ -571,10 +619,16 @@
           for (k = 0; k < e.kinds.length - 1 && x >= cum[j][k]; k++);
           kind = e.kinds[k];
         }
-        if (!kind.aoe) {
-          var y = rand() * wsum;
-          for (k = 0; k < nl - 1; k++) { y -= weight[legal[k]]; if (y < 0) break; }
-          targets[0] = legal[k];
+        if (!kind.aoe) {                                  // 单体：有嘲讽时无视目标权重；先按权重选一项，有这个特性的合法目标里平均挑，一个都没有时改为随机目标
+          var pool = legal, npool = nl, aim = e.aim;
+          if (aim && !anyTaunt) {
+            var y = rand();
+            for (k = 0; k < aim.length - 1; k++) { y -= aim[k].p; if (y < 0) break; }
+            var tt = aim[k].t, nf = 0;
+            if (tt) for (k = 0; k < nl; k++) if (traits[legal[k]][tt]) fit[nf++] = legal[k];
+            if (nf) { pool = fit; npool = nf; }
+          }
+          targets[0] = pool[Math.floor(rand() * npool)];
           na = 1;
         }
         q[j]++;
@@ -622,7 +676,7 @@
   }
 
   function scale(res, k) {
-    ['success', 'fail', 'mustAlive', 'keepDead', 'hitBad', 'endGuts', 'endTaunt'].forEach(function (f) { res[f] *= k; });
+    ['success', 'fail', 'mustAlive', 'fewOut', 'keepDead', 'hitBad', 'endGuts', 'endTaunt'].forEach(function (f) { res[f] *= k; });
     res.servants.forEach(function (x) { x.out *= k; x.guts *= k; x.hitOk *= k; });
   }
 
@@ -636,7 +690,7 @@
   }
 
   var api = {
-    MAX_ENEMIES: MAX_ENEMIES, MAX_ACTIONS: MAX_ACTIONS, MAX_SERVANTS: MAX_SERVANTS, MAX_INV: MAX_INV, MAX_GUTS: MAX_GUTS,
+    MAX_ENEMIES: MAX_ENEMIES, MAX_ACTIONS: MAX_ACTIONS, MAX_SERVANTS: MAX_SERVANTS, MAX_INV: MAX_INV, MAX_GUTS: MAX_GUTS, MAX_TRAITS: MAX_TRAITS,
     MAX_STATES: MAX_STATES, MAX_WORK: MAX_WORK, SIM_RUNS: SIM_RUNS, DECKS: DECKS, ROLES: ROLES,
     HIT_TYPES: HIT_TYPES, HIT_CRIT: HIT_CRIT, HIT_CMP: HIT_CMP, MAX_HIT_ROWS: MAX_HIT_ROWS, MAX_HITS: MAX_HITS,
     model: model, compute: compute, simulate: simulate, run: run, withSL: KP.withSL,
